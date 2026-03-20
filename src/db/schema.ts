@@ -4,6 +4,7 @@ import {
   varchar,
   text,
   integer,
+  boolean,
   timestamp,
   jsonb,
   index,
@@ -35,6 +36,7 @@ export const markets = pgTable(
     review: jsonb('review').$type<Review>(),
     iterations: jsonb('iterations').$type<Iteration[]>(),
     resolution: jsonb('resolution').$type<Resolution>(),
+    isArchived: boolean('is_archived').notNull().default(false),
   },
   (table) => [
     index('markets_status_idx').on(table.status),
@@ -69,3 +71,30 @@ export const sourcingRuns = pgTable('sourcing_runs', {
   startedAt: timestamp('started_at').defaultNow().notNull(),
   completedAt: timestamp('completed_at'),
 }).enableRLS();
+
+export const globalFeedback = pgTable('global_feedback', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  text: text('text').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}).enableRLS();
+
+export const users = pgTable('users', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  username: varchar('username', { length: 50 }).notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}).enableRLS();
+
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: varchar('token', { length: 64 }).notNull().unique(),
+    expiresAt: timestamp('expires_at').notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [index('sessions_token_idx').on(table.token)],
+).enableRLS();

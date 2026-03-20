@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { db } from '@/db/client';
 import { markets } from '@/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import type { MarketStatus, TimingSafety, Resolution } from '@/db/types';
 import { StatusBadge } from '../_components/StatusBadge';
 
@@ -22,7 +22,7 @@ export default async function ResolutionPage() {
   const results = await db
     .select()
     .from(markets)
-    .where(eq(markets.status, 'closed'))
+    .where(and(eq(markets.status, 'closed'), eq(markets.isArchived, false)))
     .orderBy(desc(markets.createdAt));
 
   return (

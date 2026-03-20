@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@types/bcryptjs": "^2.4.6",
+    "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.45.1",
     "inngest": "^3.52.6",
     "next": "16.1.6",

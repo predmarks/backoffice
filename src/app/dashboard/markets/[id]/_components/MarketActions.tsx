@@ -3,15 +3,17 @@
 import { useRouter } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import type { MarketStatus, Review, Iteration } from '@/db/types';
+import { ARCHIVABLE_STATUSES } from '@/db/types';
 
 interface MarketActionsProps {
   marketId: string;
   status: MarketStatus;
   review: Review | null;
   iterations?: Iteration[] | null;
+  isArchived: boolean;
 }
 
-export function MarketActions({ marketId, status, iterations }: MarketActionsProps) {
+export function MarketActions({ marketId, status, iterations, isArchived }: MarketActionsProps) {
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +135,24 @@ export function MarketActions({ marketId, status, iterations }: MarketActionsPro
               variant="secondary"
             />
           </>
+        )}
+
+        {(ARCHIVABLE_STATUSES as readonly string[]).includes(status) && !isArchived && (
+          <ActionButton
+            label="Archivar"
+            loading={loading === 'archive'}
+            onClick={() => handleAction('archive')}
+            variant="secondary"
+          />
+        )}
+
+        {isArchived && (
+          <ActionButton
+            label="Desarchivar"
+            loading={loading === 'unarchive'}
+            onClick={() => handleAction('unarchive')}
+            variant="secondary"
+          />
         )}
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}

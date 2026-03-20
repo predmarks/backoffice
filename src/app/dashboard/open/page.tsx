@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { db } from '@/db/client';
 import { markets } from '@/db/schema';
-import { inArray, asc } from 'drizzle-orm';
+import { eq, and, inArray, asc } from 'drizzle-orm';
 import type { MarketStatus, TimingSafety } from '@/db/types';
 import { StatusBadge } from '../_components/StatusBadge';
 import { TimingSafetyIndicator } from '../_components/TimingSafetyIndicator';
@@ -33,7 +33,7 @@ export default async function OpenMarketsPage() {
   const results = await db
     .select()
     .from(markets)
-    .where(inArray(markets.status, ['approved', 'open']))
+    .where(and(inArray(markets.status, ['approved', 'open']), eq(markets.isArchived, false)))
     .orderBy(asc(markets.endTimestamp));
 
   return (

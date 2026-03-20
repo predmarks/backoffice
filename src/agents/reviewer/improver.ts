@@ -64,6 +64,7 @@ export async function improveMarket(
   market: MarketRecord,
   feedback: string,
   iterationHistory: Iteration[],
+  humanFeedback?: string[],
 ): Promise<MarketSnapshot> {
   const marketSummary = {
     title: market.title,
@@ -79,11 +80,15 @@ export async function improveMarket(
     timingSafety: market.timingSafety,
   };
 
+  const humanFeedbackSection = humanFeedback && humanFeedback.length > 0
+    ? `\nFEEDBACK HUMANO (prioritario):\n${humanFeedback.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n`
+    : '';
+
   const userMessage = `Mejorá este mercado corrigiendo los problemas detectados.
 
 FEEDBACK DE LA REVISIÓN:
 ${feedback}
-
+${humanFeedbackSection}
 HISTORIAL DE ITERACIONES:
 ${formatHistory(iterationHistory)}
 

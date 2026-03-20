@@ -10,6 +10,7 @@ import { toDeployableMarket } from '@/lib/export';
 import { StatusBadge } from '../../_components/StatusBadge';
 import { TimingSafetyIndicator } from '../../_components/TimingSafetyIndicator';
 import { MarketActions } from './_components/MarketActions';
+import { HumanFeedback } from './_components/HumanFeedback';
 
 function formatTimestamp(ts: number): string {
   return new Intl.DateTimeFormat('es-AR', {
@@ -45,8 +46,18 @@ export default async function MarketDetailPage({ params }: Props) {
   const sourceContext = market.sourceContext as Market['sourceContext'];
   const iterations = (market.iterations as Iteration[] | null) ?? [];
 
+  const feedbackEvents = events.filter((e) => e.type === 'human_feedback');
+  const humanFeedback = feedbackEvents.map((e) => {
+    const detail = e.detail as Record<string, unknown> | null;
+    return {
+      text: (detail?.text as string) ?? '',
+      createdAt: e.createdAt.toISOString(),
+      conversation: (detail?.conversation as Array<{ role: 'user' | 'assistant'; content: string }>) ?? null,
+    };
+  });
+
   return (
-    <div className="max-w-3xl">
+    <div>
       <Link
         href="/dashboard"
         className="text-sm text-gray-500 hover:text-gray-900 mb-4 inline-block"
@@ -61,9 +72,13 @@ export default async function MarketDetailPage({ params }: Props) {
           status={market.status as Market['status']}
           review={review ?? null}
           iterations={iterations.length > 0 ? iterations : null}
+          isArchived={!!market.isArchived}
         />
       </div>
 
+      <div className="flex gap-6 items-start">
+      {/* Main content */}
+      <div className="flex-1 min-w-0 max-w-3xl">
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-start justify-between gap-4 mb-4">
           <h1 className="text-xl font-bold">{market.title}</h1>
@@ -349,6 +364,13 @@ export default async function MarketDetailPage({ params }: Props) {
           </pre>
         </div>
       )}
+      </div>
+
+      {/* Feedback sidebar */}
+      <div className="w-80 shrink-0 sticky top-6">
+        <HumanFeedback marketId={market.id} feedback={humanFeedback} />
+      </div>
+      </div>
     </div>
   );
 }
@@ -375,6 +397,9 @@ const EVENT_LABELS: Record<MarketEventType, string> = {
   human_approved: 'Aprobado',
   human_rejected: 'Rechazado',
   human_edited: 'Editado',
+  human_feedback: 'Feedback humano',
+  human_archived: 'Archivado',
+  human_unarchived: 'Desarchivado',
   pipeline_cancelled: 'Cancelado',
   status_changed: 'Estado cambiado',
 };
@@ -417,6 +442,14 @@ function formatEvent(
         const fields = detail.fields as string[] | undefined;
         if (fields?.length) parts.push(`(${fields.join(', ')})`);
         if (detail.approved) parts.push('+ aprobado');
+        break;
+      }
+      case 'human_feedback': {
+        const text = detail.text as string | undefined;
+        if (text) {
+          const snippet = text.length > 80 ? text.slice(0, 80) + '…' : text;
+          parts.push(`— "${snippet}"`);
+        }
         break;
       }
     }

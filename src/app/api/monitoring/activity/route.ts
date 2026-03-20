@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { markets, marketEvents } from '@/db/schema';
-import { eq, desc, sql, inArray } from 'drizzle-orm';
+import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import type { Iteration, Review } from '@/db/types';
 
 export const dynamic = 'force-dynamic';
@@ -25,13 +25,14 @@ interface MarketMonitorEntry {
 export async function GET(request: NextRequest) {
   const filterStatus = request.nextUrl.searchParams.get('status');
 
-  // Always get counts (unfiltered)
+  // Always get counts (excluding archived)
   const countRows = await db
     .select({
       status: markets.status,
       count: sql<number>`count(*)::int`,
     })
     .from(markets)
+    .where(eq(markets.isArchived, false))
     .groupBy(markets.status);
 
   const counts: Record<string, number> = {};
@@ -49,11 +50,12 @@ export async function GET(request: NextRequest) {
   let rows;
   if (filterStatus) {
     const statuses = filterStatus.split(',');
-    rows = statuses.length > 1
-      ? await query.where(inArray(markets.status, statuses))
-      : await query.where(eq(markets.status, statuses[0]));
+    const statusFilter = statuses.length > 1
+      ? inArray(markets.status, statuses)
+      : eq(markets.status, statuses[0]);
+    rows = await query.where(and(eq(markets.isArchived, false), statusFilter));
   } else {
-    rows = await query;
+    rows = await query.where(eq(markets.isArchived, false));
   }
 
   // For processing markets, get their latest event

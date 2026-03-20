@@ -1,7 +1,7 @@
 import { inngest } from './client';
 import { db } from '@/db/client';
-import { markets } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { markets, marketEvents, globalFeedback } from '@/db/schema';
+import { eq, and, asc } from 'drizzle-orm';
 import type { ReviewResult, Iteration, MarketSnapshot } from '@/db/types';
 import { UNFIXABLE_HARD_RULES } from '@/config/rules';
 import { THRESHOLDS } from '@/config/scoring';
@@ -118,6 +118,22 @@ export const reviewJob = inngest.createFunction(
         .select({ id: markets.id, title: markets.title })
         .from(markets)
         .where(eq(markets.status, 'open'));
+    });
+
+    // Load human feedback for this market
+    const humanFeedback = await step.run('load-human-feedback', async () => {
+      const feedbackEvents = await db
+        .select()
+        .from(marketEvents)
+        .where(and(eq(marketEvents.marketId, marketId), eq(marketEvents.type, 'human_feedback')))
+        .orderBy(asc(marketEvents.createdAt));
+      return feedbackEvents.map((e) => ((e.detail as Record<string, unknown>)?.text as string) ?? '');
+    });
+
+    // Load global feedback
+    const globalFeedbackEntries = await step.run('load-global-feedback', async () => {
+      const rows = await db.select().from(globalFeedback).orderBy(asc(globalFeedback.createdAt));
+      return rows.map((r) => r.text);
     });
 
     for (let i = 1; i <= THRESHOLDS.maxIterations; i++) {
@@ -258,7 +274,8 @@ export const reviewJob = inngest.createFunction(
           .set({ review, iterations: updatedIterations })
           .where(eq(markets.id, marketId));
 
-        const improved = await improveMarket(currentMarket, feedback, updatedIterations);
+        const allHumanFeedback = [...globalFeedbackEntries, ...humanFeedback];
+        const improved = await improveMarket(currentMarket, feedback, updatedIterations, allHumanFeedback);
 
         // Apply improved snapshot to market
         await db

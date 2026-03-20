@@ -126,6 +126,7 @@ export interface Market {
   review?: Review | null;
   iterations?: Iteration[] | null;
   resolution?: Resolution | null;
+  isArchived?: boolean;
 }
 
 export interface SourcingStep {
@@ -136,11 +137,14 @@ export interface SourcingStep {
   completedAt?: string;
 }
 
+export const ARCHIVABLE_STATUSES = ['rejected', 'cancelled', 'resolved', 'proposal'] as const;
+
 export const EVENT_TYPES = [
   'pipeline_started', 'pipeline_resumed',
   'data_verified', 'rules_checked', 'scored', 'improved',
   'pipeline_proposed', 'pipeline_rejected',
   'human_approved', 'human_rejected', 'human_edited',
+  'human_feedback', 'human_archived', 'human_unarchived',
   'pipeline_cancelled',
   'status_changed',
 ] as const;
