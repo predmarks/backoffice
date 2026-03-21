@@ -31,7 +31,10 @@ export async function POST(
     .returning();
 
   await logMarketEvent(id, 'human_rejected', {
-    detail: body.reason ? { reason: body.reason } : undefined,
+    detail: {
+      ...(body.reason ? { reason: body.reason } : {}),
+      ...(body.source ? { source: body.source } : {}),
+    },
   });
 
   return NextResponse.json({ ...updated, rejectionReason: body.reason });

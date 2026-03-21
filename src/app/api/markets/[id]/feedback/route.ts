@@ -4,6 +4,7 @@ import { db } from '@/db/client';
 import { markets, globalFeedback } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { logMarketEvent } from '@/lib/market-events';
+import { HARD_RULES, SOFT_RULES } from '@/config/rules';
 
 const client = new Anthropic({ maxRetries: 2 });
 
@@ -84,6 +85,12 @@ MERCADO EN CUESTIÓN:
 - Descripción: ${market.description}
 - Criterios de resolución: ${market.resolutionCriteria}
 - Estado: ${market.status}
+
+REGLAS DE VALIDACIÓN (el usuario puede referirse a ellas por ID):
+Reglas estrictas:
+${HARD_RULES.map((r) => `- ${r.id}: ${r.description}`).join('\n')}
+Advertencias:
+${SOFT_RULES.map((r) => `- ${r.id}: ${r.description}`).join('\n')}
 
 FEEDBACK GLOBAL EXISTENTE:
 ${existingGlobalTexts.length > 0 ? existingGlobalTexts.map((t, i) => `${i + 1}. ${t}`).join('\n') : 'Ninguno.'}`;

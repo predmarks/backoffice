@@ -1,20 +1,83 @@
 import { ingestNews } from './ingestion-news';
 import { ingestData } from './ingestion-data';
-import type { IngestionResult, DataPoint } from './types';
+import { ingestTwitter } from './ingestion-twitter';
+import { db } from '@/db/client';
+import { signals as signalsTable } from '@/db/schema';
+import { eq, inArray } from 'drizzle-orm';
+import type { IngestionResult, DataPoint, SourceSignal } from './types';
 
 export async function ingestAllSources(): Promise<IngestionResult> {
-  const [newsSignals, dataSignals] = await Promise.all([
+  const [newsSignals, dataSignals, twitterSignals] = await Promise.all([
     ingestNews(),
     ingestData(),
+    ingestTwitter(),
   ]);
+
+  const allSignals = [...newsSignals, ...dataSignals, ...twitterSignals];
 
   // Extract all data points from data signals for the generator prompt
   const dataPoints: DataPoint[] = dataSignals.flatMap(
     (s) => s.dataPoints ?? [],
   );
 
+  // Persist to signals table — upsert by URL, always return all signals
+  const persistedSignals: SourceSignal[] = [];
+  for (const signal of allSignals) {
+    try {
+      if (signal.url) {
+        // Try insert, on conflict just update text to get the existing row back
+        const [row] = await db
+          .insert(signalsTable)
+          .values({
+            type: signal.type,
+            text: signal.text,
+            summary: signal.summary ?? null,
+            url: signal.url,
+            source: signal.source,
+            category: signal.category ?? null,
+            publishedAt: new Date(signal.publishedAt),
+            dataPoints: signal.dataPoints ?? null,
+          })
+          .onConflictDoUpdate({
+            target: signalsTable.url,
+            set: { text: signal.text },
+          })
+          .returning({ id: signalsTable.id });
+
+        persistedSignals.push({ ...signal, id: row.id });
+      } else {
+        // No URL (e.g., data signals) — always insert
+        const [row] = await db
+          .insert(signalsTable)
+          .values({
+            type: signal.type,
+            text: signal.text,
+            summary: signal.summary ?? null,
+            source: signal.source,
+            category: signal.category ?? null,
+            publishedAt: new Date(signal.publishedAt),
+            dataPoints: signal.dataPoints ?? null,
+          })
+          .returning({ id: signalsTable.id });
+        persistedSignals.push({ ...signal, id: row.id });
+      }
+    } catch (err) {
+      console.warn('Signal persist failed:', err);
+      // Still include the signal even if DB persist fails
+      persistedSignals.push(signal);
+    }
+  }
+
   return {
-    signals: [...newsSignals, ...dataSignals],
+    signals: persistedSignals,
     dataPoints,
   };
+}
+
+export async function markSignalsUsed(signalIds: string[], runId: string): Promise<void> {
+  if (signalIds.length === 0) return;
+  await db
+    .update(signalsTable)
+    .set({ usedInRun: runId })
+    .where(inArray(signalsTable.id, signalIds));
 }

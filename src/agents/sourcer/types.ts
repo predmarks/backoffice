@@ -8,6 +8,7 @@ export interface DataPoint {
 }
 
 export interface SourceSignal {
+  id?: string;
   type: 'news' | 'social' | 'event' | 'data';
   text: string;
   summary?: string;
@@ -17,6 +18,8 @@ export interface SourceSignal {
   entities: string[];
   category?: MarketCategory;
   dataPoints?: DataPoint[];
+  score?: number;
+  scoreReason?: string;
 }
 
 export interface IngestionResult {

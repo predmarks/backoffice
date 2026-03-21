@@ -2,8 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const client = new Anthropic({ maxRetries: 2 });
 
-const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 16000;
+const MODEL = 'claude-opus-4-20250514';
+const MAX_TOKENS = 32000;
 
 interface CallClaudeOptions {
   system: string;
@@ -23,20 +23,22 @@ export async function callClaude<T>(
 ): Promise<CallClaudeResult<T>> {
   const toolName = options.outputToolName ?? 'output';
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: options.maxTokens ?? MAX_TOKENS,
-    system: options.system,
-    tools: [
-      {
-        name: toolName,
-        description: 'Return the structured output',
-        input_schema: options.outputSchema as Anthropic.Tool['input_schema'],
-      },
-    ],
-    tool_choice: { type: 'tool' as const, name: toolName },
-    messages: [{ role: 'user', content: options.userMessage }],
-  });
+  const response = await client.messages
+    .stream({
+      model: MODEL,
+      max_tokens: options.maxTokens ?? MAX_TOKENS,
+      system: options.system,
+      tools: [
+        {
+          name: toolName,
+          description: 'Return the structured output',
+          input_schema: options.outputSchema as Anthropic.Tool['input_schema'],
+        },
+      ],
+      tool_choice: { type: 'tool' as const, name: toolName },
+      messages: [{ role: 'user', content: options.userMessage }],
+    })
+    .finalMessage();
 
   const toolBlock = response.content.find(
     (block): block is Anthropic.ToolUseBlock =>
@@ -61,21 +63,23 @@ export async function callClaudeWithSearch<T>(
 ): Promise<CallClaudeResult<T>> {
   const toolName = options.outputToolName ?? 'output';
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: options.maxTokens ?? MAX_TOKENS,
-    system: options.system,
-    tools: [
-      { type: 'web_search_20250305', name: 'web_search' },
-      {
-        name: toolName,
-        description: 'Return the structured output',
-        input_schema: options.outputSchema as Anthropic.Tool['input_schema'],
-      },
-    ],
-    tool_choice: { type: 'auto' as const },
-    messages: [{ role: 'user', content: options.userMessage }],
-  });
+  const response = await client.messages
+    .stream({
+      model: MODEL,
+      max_tokens: options.maxTokens ?? MAX_TOKENS,
+      system: options.system,
+      tools: [
+        { type: 'web_search_20250305', name: 'web_search' },
+        {
+          name: toolName,
+          description: 'Return the structured output',
+          input_schema: options.outputSchema as Anthropic.Tool['input_schema'],
+        },
+      ],
+      tool_choice: { type: 'auto' as const },
+      messages: [{ role: 'user', content: options.userMessage }],
+    })
+    .finalMessage();
 
   const toolBlock = response.content.find(
     (block): block is Anthropic.ToolUseBlock =>

@@ -1,5 +1,8 @@
 import { callClaude } from '@/lib/llm';
 import { HARD_RULES, SOFT_RULES } from '@/config/rules';
+import { db } from '@/db/client';
+import { marketEvents, markets } from '@/db/schema';
+import { eq, desc, and, gte, isNotNull } from 'drizzle-orm';
 import type { SourceSignal, DataPoint, GeneratedCandidate } from './types';
 
 const SYSTEM_PROMPT = `Sos un creador de mercados predictivos para Predmarks, una plataforma
@@ -49,7 +52,7 @@ CONTINGENCIAS ESTÁNDAR (incluir las que apliquen):
 REGLAS DE VALIDACIÓN (tu output será verificado contra estas):
 {rules}
 
-Generá entre 8 y 15 mercados candidatos a partir de estas señales.
+Generá exactamente {targetCount} mercados candidatos a partir de estas señales.
 Intentá cubrir la mayor variedad de categorías y temas posible.
 Salteá señales que claramente no dan buenos mercados, pero sé generoso:
 si una señal tiene potencial razonable, generá el mercado.
@@ -93,6 +96,41 @@ const OUTPUT_SCHEMA = {
   required: ['candidates'] as const,
 };
 
+async function loadTriageFeedback(): Promise<string> {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const rejections = await db
+    .select({
+      title: markets.title,
+      reason: marketEvents.detail,
+    })
+    .from(marketEvents)
+    .innerJoin(markets, eq(marketEvents.marketId, markets.id))
+    .where(
+      and(
+        eq(marketEvents.type, 'human_rejected'),
+        gte(marketEvents.createdAt, thirtyDaysAgo),
+        isNotNull(marketEvents.detail),
+      ),
+    )
+    .orderBy(desc(marketEvents.createdAt))
+    .limit(50);
+
+  const withReasons = rejections.filter(
+    (r) => r.reason && typeof r.reason === 'object' && 'reason' in r.reason && (r.reason as Record<string, unknown>).reason,
+  );
+
+  if (withReasons.length === 0) return '';
+
+  const lines = withReasons.map((r) => {
+    const reason = (r.reason as Record<string, string>).reason;
+    return `- "${r.title}" → ${reason}`;
+  });
+
+  return `\nDESCARTES RECIENTES DEL EDITOR (evitar patrones similares):\n${lines.join('\n')}\n`;
+}
+
 function formatDataPoints(dataPoints: DataPoint[]): string {
   if (dataPoints.length === 0) return 'No hay datos actuales disponibles.';
   return dataPoints
@@ -120,18 +158,21 @@ function formatSignals(signals: SourceSignal[]): string {
     .join('\n\n');
 }
 
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 50;
 
 async function generateBatch(
   signals: SourceSignal[],
   dataPoints: DataPoint[],
   openMarketTitles: string[],
   batchIndex: number,
+  targetCount: number,
+  triageFeedback: string,
 ): Promise<GeneratedCandidate[]> {
   const today = new Date().toISOString().split('T')[0];
 
   const system = SYSTEM_PROMPT
-    .replace('{rules}', formatRules());
+    .replace('{rules}', formatRules())
+    .replace('{targetCount}', String(targetCount));
 
   const userMessage = `DATOS ACTUALES (no inventar otros):
 ${formatDataPoints(dataPoints)}
@@ -139,7 +180,7 @@ ${formatDataPoints(dataPoints)}
 HOY: ${today}
 AÑO ACTUAL: ${new Date().getFullYear()}
 IMPORTANTE: Todos los endTimestamp y expectedResolutionDate deben ser en el año ${new Date().getFullYear()}.
-
+${triageFeedback}
 MERCADOS ABIERTOS (no duplicar):
 ${openMarketTitles.length > 0 ? openMarketTitles.map((t) => `- ${t}`).join('\n') : 'Ninguno'}
 
@@ -160,8 +201,11 @@ export async function generateMarkets(
   signals: SourceSignal[],
   dataPoints: DataPoint[],
   openMarketTitles: string[],
+  targetCount: number = 10,
 ): Promise<GeneratedCandidate[]> {
   if (signals.length === 0) return [];
+
+  const triageFeedback = await loadTriageFeedback();
 
   // Split signals into batches for parallel generation
   const batches: SourceSignal[][] = [];
@@ -172,16 +216,23 @@ export async function generateMarkets(
   console.log(`Generating candidates from ${batches.length} batch(es) of signals...`);
 
   const results = await Promise.allSettled(
-    batches.map((batch, i) => generateBatch(batch, dataPoints, openMarketTitles, i)),
+    batches.map((batch, i) => generateBatch(batch, dataPoints, openMarketTitles, i, targetCount, triageFeedback)),
   );
 
   const allCandidates: GeneratedCandidate[] = [];
+  const errors: string[] = [];
   for (const result of results) {
     if (result.status === 'fulfilled') {
       allCandidates.push(...result.value);
     } else {
-      console.warn('Generation batch failed:', result.reason);
+      const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      console.error('Generation batch failed:', msg);
+      errors.push(msg);
     }
+  }
+
+  if (allCandidates.length === 0 && errors.length > 0) {
+    throw new Error(`All generation batches failed: ${errors.join('; ')}`);
   }
 
   return allCandidates;

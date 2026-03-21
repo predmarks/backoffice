@@ -1,7 +1,7 @@
 import { inngest } from './client';
 import { db } from '@/db/client';
 import { markets, marketEvents, globalFeedback } from '@/db/schema';
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, desc, gte } from 'drizzle-orm';
 import type { ReviewResult, Iteration, MarketSnapshot } from '@/db/types';
 import { UNFIXABLE_HARD_RULES } from '@/config/rules';
 import { THRESHOLDS } from '@/config/scoring';
@@ -134,6 +134,26 @@ export const reviewJob = inngest.createFunction(
     const globalFeedbackEntries = await step.run('load-global-feedback', async () => {
       const rows = await db.select().from(globalFeedback).orderBy(asc(globalFeedback.createdAt));
       return rows.map((r) => r.text);
+    });
+
+    // Load triage rejection patterns
+    const triageFeedback = await step.run('load-triage-feedback', async () => {
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const rejections = await db
+        .select({ detail: marketEvents.detail })
+        .from(marketEvents)
+        .where(
+          and(
+            eq(marketEvents.type, 'human_rejected'),
+            gte(marketEvents.createdAt, thirtyDaysAgo),
+          ),
+        )
+        .orderBy(desc(marketEvents.createdAt))
+        .limit(20);
+      return rejections
+        .filter((r) => r.detail && typeof r.detail === 'object' && 'reason' in r.detail && (r.detail as Record<string, unknown>).reason)
+        .map((r) => `Descarte del editor: ${(r.detail as Record<string, string>).reason}`);
     });
 
     for (let i = 1; i <= THRESHOLDS.maxIterations; i++) {
@@ -274,7 +294,7 @@ export const reviewJob = inngest.createFunction(
           .set({ review, iterations: updatedIterations })
           .where(eq(markets.id, marketId));
 
-        const allHumanFeedback = [...globalFeedbackEntries, ...humanFeedback];
+        const allHumanFeedback = [...globalFeedbackEntries, ...humanFeedback, ...triageFeedback];
         const improved = await improveMarket(currentMarket, feedback, updatedIterations, allHumanFeedback);
 
         // Apply improved snapshot to market

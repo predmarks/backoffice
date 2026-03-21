@@ -32,3 +32,7 @@ export const BCRA_VARIABLES: BCRAVariable[] = [
 export const BCRA_API_BASE = 'https://api.bcra.gob.ar/estadisticas/v4.0/Monetarias';
 
 export const AMBITO_DOLAR_BLUE_URL = 'https://mercados.ambito.com/dolar/informal/variacion';
+
+// Twitter/X API
+export const X_BEARER_TOKEN = process.env.X_BEARER_TOKEN ?? '';
+export const X_TRENDS_WOEID = 23424747; // Argentina

@@ -8,8 +8,11 @@ import {
   timestamp,
   jsonb,
   index,
+  real,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import type { SourceContext, Review, Resolution, Iteration, SourcingStep, MarketEventType } from './types';
+import type { SourceSignal } from '@/agents/sourcer/types';
 
 export const markets = pgTable(
   'markets',
@@ -64,6 +67,7 @@ export const sourcingRuns = pgTable('sourcing_runs', {
   status: varchar('status', { length: 20 }).notNull().default('running'),
   currentStep: varchar('current_step', { length: 30 }).notNull().default('check-cap'),
   steps: jsonb('steps').notNull().default([]).$type<SourcingStep[]>(),
+  signals: jsonb('signals').$type<SourceSignal[]>(),
   signalsCount: integer('signals_count'),
   candidatesGenerated: integer('candidates_generated'),
   candidatesSaved: integer('candidates_saved'),
@@ -71,6 +75,31 @@ export const sourcingRuns = pgTable('sourcing_runs', {
   startedAt: timestamp('started_at').defaultNow().notNull(),
   completedAt: timestamp('completed_at'),
 }).enableRLS();
+
+export const signals = pgTable(
+  'signals',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    type: varchar('type', { length: 10 }).notNull(),
+    text: text('text').notNull(),
+    summary: text('summary'),
+    url: text('url'),
+    source: varchar('source', { length: 50 }).notNull(),
+    category: varchar('category', { length: 30 }),
+    publishedAt: timestamp('published_at').notNull(),
+    dataPoints: jsonb('data_points').$type<import('@/agents/sourcer/types').DataPoint[]>(),
+    score: real('score'),
+    scoreReason: text('score_reason'),
+    scoredAt: timestamp('scored_at'),
+    usedInRun: uuid('used_in_run').references(() => sourcingRuns.id),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('signals_url_idx').on(table.url),
+    index('signals_created_idx').on(table.createdAt),
+    index('signals_score_idx').on(table.score),
+  ],
+).enableRLS();
 
 export const globalFeedback = pgTable('global_feedback', {
   id: uuid('id').defaultRandom().primaryKey(),

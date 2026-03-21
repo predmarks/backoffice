@@ -3,8 +3,6 @@ import { RSS_FEEDS } from '@/config/sources';
 import type { SourceSignal } from './types';
 
 const parser = new Parser({ timeout: 10_000 });
-const MAX_ITEMS_PER_FEED = 15;
-const MAX_TOTAL_SIGNALS = 10;
 const MAX_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
 
 export async function ingestNews(): Promise<SourceSignal[]> {
@@ -35,8 +33,7 @@ export async function ingestNews(): Promise<SourceSignal[]> {
         const da = a.isoDate ? new Date(a.isoDate).getTime() : 0;
         const db = b.isoDate ? new Date(b.isoDate).getTime() : 0;
         return db - da;
-      })
-      .slice(0, MAX_ITEMS_PER_FEED);
+      });
 
     for (const item of sorted) {
       if (item.link && seenUrls.has(item.link)) continue;
@@ -55,5 +52,5 @@ export async function ingestNews(): Promise<SourceSignal[]> {
     }
   }
 
-  return signals.slice(0, MAX_TOTAL_SIGNALS);
+  return signals;
 }

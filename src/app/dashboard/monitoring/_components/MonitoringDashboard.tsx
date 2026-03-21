@@ -110,12 +110,13 @@ function ActionButton({
 }: {
   label: string;
   onClick: (e: React.MouseEvent) => void;
-  variant: 'cancel' | 'resume' | 'review';
+  variant: 'cancel' | 'resume' | 'review' | 'reject';
 }) {
   const styles = {
     cancel: 'text-red-600 hover:bg-red-50',
     resume: 'text-blue-600 hover:bg-blue-50',
     review: 'text-blue-600 hover:bg-blue-50',
+    reject: 'text-red-600 hover:bg-red-50',
   };
 
   return (
@@ -131,11 +132,15 @@ function ActionButton({
 function MarketRow({
   market,
   now,
+  selected,
+  onSelect,
   onAction,
 }: {
   market: MarketMonitorEntry;
   now: number;
-  onAction: (id: string, action: 'cancel' | 'resume' | 'review') => void;
+  selected: boolean;
+  onSelect: (id: string, checked: boolean) => void;
+  onAction: (id: string, action: 'cancel' | 'resume' | 'review' | 'reject') => void;
 }) {
   const config = STATUS_CONFIG[market.status] ?? STATUS_CONFIG.candidate;
   const isLive = market.status === 'processing' && !market.stale;
@@ -146,11 +151,21 @@ function MarketRow({
       ? new Date(market.stepTimestamp).getTime()
       : now;
   const elapsed = isLive ? now - startTime : endTime - startTime;
+  const isCandidate = market.status === 'candidate';
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors">
-      {/* Status dot */}
-      <span className={`w-2 h-2 rounded-full shrink-0 ${config.dot}`} />
+      {/* Checkbox for candidates */}
+      {isCandidate ? (
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={(e) => onSelect(market.id, e.target.checked)}
+          className="w-3.5 h-3.5 shrink-0 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+      ) : (
+        <span className={`w-2 h-2 rounded-full shrink-0 ${config.dot} ml-0.5`} />
+      )}
 
       {/* Title + detail (linked) */}
       <Link href={`/dashboard/markets/${market.id}`} className="min-w-0 flex-1">
@@ -162,12 +177,19 @@ function MarketRow({
       </Link>
 
       {/* Actions */}
-      {market.status === 'candidate' && (
-        <ActionButton
-          label="Revisar"
-          onClick={(e) => { e.preventDefault(); onAction(market.id, 'review'); }}
-          variant="review"
-        />
+      {isCandidate && (
+        <>
+          <ActionButton
+            label="Revisar"
+            onClick={(e) => { e.preventDefault(); onAction(market.id, 'review'); }}
+            variant="review"
+          />
+          <ActionButton
+            label="Descartar"
+            onClick={(e) => { e.preventDefault(); onAction(market.id, 'reject'); }}
+            variant="reject"
+          />
+        </>
       )}
       {market.status === 'processing' && !market.stale && (
         <ActionButton
@@ -200,12 +222,13 @@ export function MonitoringDashboard() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const fetchData = useCallback(async (filter: string | null) => {
     try {
       let url = '/api/monitoring/activity';
       if (filter) {
-        // 'review' maps to both candidate + processing statuses
         const statusParam = filter === 'review' ? 'candidate,processing' : filter;
         url += `?status=${statusParam}`;
       }
@@ -225,6 +248,9 @@ export function MonitoringDashboard() {
   }, [activeFilter, fetchData]);
 
   const hasProcessing = markets.some((m) => m.status === 'processing');
+  const candidateIds = markets.filter((m) => m.status === 'candidate').map((m) => m.id);
+  const selectedCount = [...selected].filter((id) => candidateIds.includes(id)).length;
+  const allCandidatesSelected = candidateIds.length > 0 && candidateIds.every((id) => selected.has(id));
 
   // Poll
   useEffect(() => {
@@ -241,19 +267,88 @@ export function MonitoringDashboard() {
 
   function handleFilterClick(key: string) {
     setActiveFilter((prev) => (prev === key ? null : key));
+    setSelected(new Set());
   }
 
-  async function handleAction(marketId: string, action: 'cancel' | 'resume' | 'review') {
+  function handleSelect(id: string, checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function handleSelectAll() {
+    if (allCandidatesSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(candidateIds));
+    }
+  }
+
+  async function handleAction(marketId: string, action: 'cancel' | 'resume' | 'review' | 'reject') {
+    if (action === 'reject') {
+      const reason = prompt('Motivo del descarte (opcional):');
+      if (reason === null) return; // cancelled
+      try {
+        const res = await fetch(`/api/markets/${marketId}/reject`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason, source: 'triage' }),
+        });
+        if (res.ok) {
+          setSelected((prev) => { const next = new Set(prev); next.delete(marketId); return next; });
+          fetchData(activeFilter);
+        }
+      } catch { /* ignore */ }
+      return;
+    }
+
     try {
       const url = action === 'review'
         ? `/api/review/${marketId}`
         : `/api/markets/${marketId}/${action}`;
       const res = await fetch(url, { method: 'POST' });
       if (res.ok) {
+        setSelected((prev) => { const next = new Set(prev); next.delete(marketId); return next; });
         fetchData(activeFilter);
       }
     } catch {
       // ignore
+    }
+  }
+
+  async function handleBulkAction(action: 'review' | 'reject') {
+    const ids = [...selected].filter((id) => candidateIds.includes(id));
+    if (ids.length === 0) return;
+
+    let reason = '';
+    if (action === 'reject') {
+      const input = prompt(`Motivo del descarte para ${ids.length} candidatos (opcional):`);
+      if (input === null) return;
+      reason = input;
+    }
+
+    setBulkBusy(true);
+    try {
+      for (const id of ids) {
+        if (action === 'review') {
+          await fetch(`/api/review/${id}`, { method: 'POST' });
+        } else {
+          await fetch(`/api/markets/${id}/reject`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason, source: 'triage' }),
+          });
+        }
+      }
+      setSelected(new Set());
+      fetchData(activeFilter);
+    } catch {
+      // ignore
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -289,13 +384,53 @@ export function MonitoringDashboard() {
         })}
       </div>
 
+      {/* Bulk actions bar */}
+      {candidateIds.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2 bg-gray-50 rounded-lg border border-gray-200">
+          <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={allCandidatesSelected}
+              onChange={handleSelectAll}
+              className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            {selectedCount > 0 ? `${selectedCount} seleccionados` : 'Seleccionar todos'}
+          </label>
+          {selectedCount > 0 && (
+            <>
+              <button
+                onClick={() => handleBulkAction('review')}
+                disabled={bulkBusy}
+                className="px-3 py-1 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {bulkBusy ? 'Procesando...' : `Revisar ${selectedCount}`}
+              </button>
+              <button
+                onClick={() => handleBulkAction('reject')}
+                disabled={bulkBusy}
+                className="px-3 py-1 text-xs font-medium rounded text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
+              >
+                Descartar {selectedCount}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Market list */}
       {markets.length === 0 ? (
         <p className="text-sm text-gray-500 py-4">No hay mercados{activeFilter ? ' con este estado' : ''}.</p>
       ) : (
         <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
           {markets.map((market) => (
-            <MarketRow key={market.id} market={market} now={now} onAction={handleAction} />
+            <MarketRow
+              key={market.id}
+              market={market}
+              now={now}
+              selected={selected.has(market.id)}
+              onSelect={handleSelect}
+              onAction={handleAction}
+            />
           ))}
         </div>
       )}

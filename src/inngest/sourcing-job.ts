@@ -2,14 +2,16 @@ import { inngest } from './client';
 import { db } from '@/db/client';
 import { markets, sourcingRuns } from '@/db/schema';
 import { eq, sql, inArray } from 'drizzle-orm';
-import { ingestAllSources } from '@/agents/sourcer/ingestion';
+import { ingestAllSources, markSignalsUsed } from '@/agents/sourcer/ingestion';
 import { generateMarkets } from '@/agents/sourcer/generator';
 import { deduplicateCandidates } from '@/agents/sourcer/deduplication';
+import { scoreSignals } from '@/agents/sourcer/scorer';
 import type { SourcingStep } from '@/db/types';
 
 const CANDIDATE_CAP = 50;
 
-const STEP_NAMES = ['check-cap', 'ingest', 'generate', 'dedup', 'save', 'trigger-reviews'] as const;
+const STEP_NAMES = ['check-cap', 'ingest', 'score', 'generate', 'dedup', 'save'] as const;
+const TOP_SIGNALS_FOR_GENERATOR = 50;
 
 function buildSteps(currentIdx: number, detail?: string): SourcingStep[] {
   return STEP_NAMES.map((name, i) => ({
@@ -25,7 +27,8 @@ export const sourcingJob = inngest.createFunction(
     { cron: '0 9 * * 1,3,5' },
     { event: 'market/sourcing.requested' },
   ],
-  async ({ step }) => {
+  async ({ event, step }) => {
+    const targetCount = Number(event.data?.count) || 10;
     // Create run record
     const runId = await step.run('init-run', async () => {
       const [run] = await db
@@ -82,9 +85,41 @@ export const sourcingJob = inngest.createFunction(
         const result = await ingestAllSources();
         await db
           .update(sourcingRuns)
-          .set({ signalsCount: result.signals.length })
+          .set({ signals: result.signals, signalsCount: result.signals.length })
           .where(eq(sourcingRuns.id, runId));
         return result;
+      });
+
+      // Step 2: Score signals
+      const scoredSignals = await step.run('score', async () => {
+        await updateRun(2);
+        const scored = await scoreSignals(ingestionResult.signals);
+        // Sort by score descending, take top N for generator
+        scored.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+        // Update run with scored signals
+        await db
+          .update(sourcingRuns)
+          .set({ signals: scored })
+          .where(eq(sourcingRuns.id, runId));
+        // Persist scores to signals table
+        const { signals: signalsTable } = await import('@/db/schema');
+        for (const s of scored) {
+          if (s.id) {
+            await db
+              .update(signalsTable)
+              .set({ score: s.score ?? 0, scoreReason: s.scoreReason ?? null, scoredAt: new Date() })
+              .where(eq(signalsTable.id, s.id));
+          }
+        }
+        return scored;
+      });
+
+      const topSignals = scoredSignals.slice(0, TOP_SIGNALS_FOR_GENERATOR);
+
+      // Mark top signals as used in this run
+      await step.run('mark-signals-used', async () => {
+        const signalIds = topSignals.map((s) => s.id).filter(Boolean) as string[];
+        await markSignalsUsed(signalIds, runId);
       });
 
       // Load open markets (part of generate step visually)
@@ -95,13 +130,14 @@ export const sourcingJob = inngest.createFunction(
           .where(inArray(markets.status, ['open', 'approved']));
       });
 
-      // Step 2: Generate
+      // Step 3: Generate
       const candidates = await step.run('generate', async () => {
-        await updateRun(2);
+        await updateRun(3);
         const result = await generateMarkets(
-          ingestionResult.signals,
+          topSignals,
           ingestionResult.dataPoints,
           openMarkets.map((m) => m.title),
+          targetCount,
         );
         await db
           .update(sourcingRuns)
@@ -127,9 +163,9 @@ export const sourcingJob = inngest.createFunction(
         return { status: 'complete', candidates: 0, runId };
       }
 
-      // Step 3: Dedup
+      // Step 4: Dedup
       const unique = await step.run('dedup', async () => {
-        await updateRun(3);
+        await updateRun(4);
         return deduplicateCandidates(candidates, openMarkets);
       });
 
@@ -149,9 +185,9 @@ export const sourcingJob = inngest.createFunction(
         return { status: 'complete', candidates: 0, runId };
       }
 
-      // Step 4: Save
+      // Step 5: Save
       const savedIds = await step.run('save', async () => {
-        await updateRun(4);
+        await updateRun(5);
         const ids: string[] = [];
         for (const candidate of unique) {
           const [inserted] = await db
@@ -183,17 +219,6 @@ export const sourcingJob = inngest.createFunction(
         return ids;
       });
 
-      // Step 5: Trigger reviews
-      await step.run('trigger-reviews', async () => {
-        await updateRun(5);
-        await inngest.send(
-          savedIds.map((id) => ({
-            name: 'market/candidate.created' as const,
-            data: { id },
-          })),
-        );
-      });
-
       // Mark complete
       await step.run('mark-complete', async () => {
         await db
@@ -207,7 +232,7 @@ export const sourcingJob = inngest.createFunction(
           .where(eq(sourcingRuns.id, runId));
       });
 
-      return { status: 'complete', candidates: savedIds.length, runId };
+      return { status: 'complete', candidates: savedIds.length, runId, savedIds };
     } catch (err) {
       // Mark run as failed
       await db

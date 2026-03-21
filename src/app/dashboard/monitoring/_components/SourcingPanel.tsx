@@ -19,10 +19,10 @@ interface SourcingRun {
 const STEP_LABELS: Record<string, string> = {
   'check-cap': 'Verificar capacidad',
   'ingest': 'Ingerir señales',
+  'score': 'Puntuar señales',
   'generate': 'Generar candidatos',
   'dedup': 'Deduplicar',
   'save': 'Guardar en DB',
-  'trigger-reviews': 'Iniciar revisiones',
 };
 
 function formatDate(dateStr: string): string {
@@ -91,10 +91,14 @@ function useSourcingData() {
     };
   }, [hasRunning, fetchRuns]);
 
-  async function handleTrigger() {
+  async function handleTrigger(count: number) {
     setTriggering(true);
     try {
-      const res = await fetch('/api/sourcing', { method: 'POST' });
+      const res = await fetch('/api/sourcing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count }),
+      });
       if (!res.ok) throw new Error('Failed');
       setLoading(true);
       setTimeout(fetchRuns, 1000);
@@ -106,28 +110,51 @@ function useSourcingData() {
     }
   }
 
-  return { runs, candidateCap, loading, triggering, hasRunning, handleTrigger };
+  const runningRun = runs.find((r) => r.status === 'running');
+  const runningStep = runningRun?.currentStep;
+
+  return { runs, candidateCap, loading, triggering, hasRunning, runningStep, handleTrigger };
 }
 
 export function SourcingTrigger({
-  candidateCap,
   triggering,
   hasRunning,
+  runningStep,
   onTrigger,
 }: {
-  candidateCap: number;
   triggering: boolean;
   hasRunning: boolean;
-  onTrigger: () => void;
+  runningStep?: string;
+  onTrigger: (count: number) => void;
 }) {
+  const [count, setCount] = useState(10);
+
   return (
-    <button
-      onClick={onTrigger}
-      disabled={triggering || hasRunning}
-      className="px-4 py-2 text-sm font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 transition-colors"
-    >
-      {triggering ? 'Iniciando...' : hasRunning ? 'En progreso...' : `Sugerir ${candidateCap || '?'} mercados nuevos`}
-    </button>
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min={1}
+          max={50}
+          value={count}
+          onChange={(e) => setCount(Math.min(50, Math.max(1, Number(e.target.value) || 1)))}
+          disabled={triggering || hasRunning}
+          className="w-16 px-2 py-2 text-sm border border-gray-300 rounded-md text-center disabled:opacity-50"
+        />
+        <button
+          onClick={() => onTrigger(count)}
+          disabled={triggering || hasRunning}
+          className="px-4 py-2 text-sm font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 transition-colors"
+        >
+          {triggering ? 'Iniciando...' : hasRunning ? 'En progreso...' : 'Generar mercados'}
+        </button>
+      </div>
+      {hasRunning && runningStep && (
+        <span className="text-xs text-blue-600 animate-pulse">
+          {STEP_LABELS[runningStep] || runningStep}...
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -155,6 +182,110 @@ function RunSummary({ run }: { run: SourcingRun }) {
       {stats && <span className="text-gray-500">{stats}</span>}
       {run.error && <span className="text-red-500 truncate max-w-48">{run.error}</span>}
     </span>
+  );
+}
+
+interface Signal {
+  type: 'news' | 'social' | 'event' | 'data';
+  text: string;
+  summary?: string;
+  url?: string;
+  source: string;
+  publishedAt: string;
+  category?: string;
+  dataPoints?: { metric: string; currentValue: number; previousValue?: number; unit: string }[];
+  score?: number;
+  scoreReason?: string;
+}
+
+const TYPE_BADGE: Record<string, { label: string; className: string }> = {
+  news: { label: 'Noticia', className: 'bg-blue-100 text-blue-700' },
+  data: { label: 'Dato', className: 'bg-amber-100 text-amber-700' },
+  social: { label: 'Social', className: 'bg-purple-100 text-purple-700' },
+  event: { label: 'Evento', className: 'bg-green-100 text-green-700' },
+};
+
+function SignalList({ runId }: { runId: string }) {
+  const [signals, setSignals] = useState<Signal[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch(`/api/sourcing/status?runId=${runId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setSignals(data.run?.signals ?? null);
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [runId]);
+
+  if (loading) return <div className="text-xs text-gray-400 py-2">Cargando señales...</div>;
+  if (!signals || signals.length === 0) return <div className="text-xs text-gray-400 py-2">Sin señales registradas</div>;
+
+  // Group by source
+  const grouped = new Map<string, Signal[]>();
+  for (const s of signals) {
+    const list = grouped.get(s.source) ?? [];
+    list.push(s);
+    grouped.set(s.source, list);
+  }
+
+  return (
+    <div className="space-y-3 mt-2">
+      <h4 className="text-xs font-medium text-gray-600">Señales consumidas ({signals.length})</h4>
+      {Array.from(grouped.entries()).map(([source, items]) => (
+        <div key={source}>
+          <div className="text-xs font-medium text-gray-500 mb-1">{source} ({items.length})</div>
+          <div className="space-y-1">
+            {items.map((s, i) => {
+              const badge = TYPE_BADGE[s.type] ?? TYPE_BADGE.news;
+              return (
+                <div key={i} className="flex items-start gap-2 text-xs">
+                  <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${badge.className}`}>
+                    {badge.label}
+                  </span>
+                  {s.score != null && (
+                    <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] font-mono ${
+                      s.score >= 7 ? 'bg-green-100 text-green-700' :
+                      s.score >= 4 ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-gray-100 text-gray-500'
+                    }`} title={s.scoreReason}>
+                      {s.score.toFixed(1)}
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    <span className="text-gray-700">
+                      {s.url ? (
+                        <a href={s.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                          {s.text}
+                        </a>
+                      ) : s.text}
+                    </span>
+                    {s.dataPoints && s.dataPoints.length > 0 && (
+                      <span className="text-gray-400 ml-1">
+                        {s.dataPoints.map((dp) => {
+                          const prev = dp.previousValue != null ? ` (ant: ${dp.previousValue})` : '';
+                          return `${dp.currentValue} ${dp.unit}${prev}`;
+                        }).join(', ')}
+                      </span>
+                    )}
+                    <span className="text-gray-300 ml-1">{formatDate(s.publishedAt)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -195,6 +326,7 @@ function SourcingLog({ runs, loading }: { runs: SourcingRun[]; loading: boolean 
                   {run.error && (
                     <p className="text-xs text-red-600 bg-red-50 rounded p-2">{run.error}</p>
                   )}
+                  <SignalList runId={run.id} />
                 </div>
               )}
             </div>
@@ -206,15 +338,15 @@ function SourcingLog({ runs, loading }: { runs: SourcingRun[]; loading: boolean 
 }
 
 export function SourcingPanel() {
-  const { runs, candidateCap, loading, triggering, hasRunning, handleTrigger } = useSourcingData();
+  const { runs, loading, triggering, hasRunning, runningStep, handleTrigger } = useSourcingData();
 
   return (
     <SourcingPanelView
       runs={runs}
-      candidateCap={candidateCap}
       loading={loading}
       triggering={triggering}
       hasRunning={hasRunning}
+      runningStep={runningStep}
       onTrigger={handleTrigger}
     />
   );
@@ -222,25 +354,25 @@ export function SourcingPanel() {
 
 export function SourcingPanelView({
   runs,
-  candidateCap,
   loading,
   triggering,
   hasRunning,
+  runningStep,
   onTrigger,
 }: {
   runs: SourcingRun[];
-  candidateCap: number;
   loading: boolean;
   triggering: boolean;
   hasRunning: boolean;
-  onTrigger: () => void;
+  runningStep?: string;
+  onTrigger: (count: number) => void;
 }) {
   return (
     <>
       <SourcingTrigger
-        candidateCap={candidateCap}
         triggering={triggering}
         hasRunning={hasRunning}
+        runningStep={runningStep}
         onTrigger={onTrigger}
       />
       <SourcingLog runs={runs} loading={loading} />

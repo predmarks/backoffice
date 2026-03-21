@@ -4,16 +4,16 @@ import { SourcingTrigger, SourcingLog, useSourcingData } from './monitoring/_com
 import { MonitoringDashboard } from './monitoring/_components/MonitoringDashboard';
 
 export default function DashboardPage() {
-  const { runs, candidateCap, loading, triggering, hasRunning, handleTrigger } = useSourcingData();
+  const { runs, loading, triggering, hasRunning, runningStep, handleTrigger } = useSourcingData();
 
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Monitoreo</h1>
         <SourcingTrigger
-          candidateCap={candidateCap}
           triggering={triggering}
           hasRunning={hasRunning}
+          runningStep={runningStep}
           onTrigger={handleTrigger}
         />
       </div>
