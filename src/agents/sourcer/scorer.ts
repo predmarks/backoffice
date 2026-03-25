@@ -42,6 +42,48 @@ interface ScoreResult {
   reason: string;
 }
 
+const RESCORE_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    score: { type: 'number' as const, description: 'Nuevo score 0-10' },
+    reason: { type: 'string' as const, description: 'Razón del nuevo score' },
+  },
+  required: ['score', 'reason'] as const,
+};
+
+export async function rescoreTopic(
+  topic: { name: string; summary: string; category: string },
+  feedback: { text: string; createdAt: string }[],
+): Promise<{ score: number; reason: string }> {
+  const feedbackLines = feedback.map((f) => `- ${f.text}`).join('\n');
+
+  const { result } = await callClaude<{ score: number; reason: string }>({
+    system: `Sos un evaluador de temas para Predmarks, una plataforma argentina de mercados de predicción.
+Re-evaluá el score de este tema (0-10) considerando el feedback del editor.
+
+Criterios:
+- Controversia (0-10): ¿Ambos resultados son plausibles?
+- Temporalidad (0-10): ¿Tiene fecha de resolución clara y próxima?
+- Interés (0-10): ¿Le importa a la audiencia ARGENTINA? (temas no locales = score bajo)
+- Medibilidad (0-10): ¿Se puede verificar con fuente pública?
+
+Score = promedio. El feedback del editor tiene MÁXIMA prioridad.
+Si el editor dice que algo no es relevante, el score debe bajar drásticamente.`,
+    userMessage: `TEMA: ${topic.name}
+CATEGORÍA: ${topic.category}
+RESUMEN: ${topic.summary}
+
+FEEDBACK DEL EDITOR:
+${feedbackLines}
+
+Re-evaluá el score considerando este feedback.`,
+    outputSchema: RESCORE_SCHEMA,
+    outputToolName: 'rescore_topic',
+  });
+
+  return result;
+}
+
 export async function scoreSignals(signals: SourceSignal[]): Promise<SourceSignal[]> {
   if (signals.length === 0) return [];
 

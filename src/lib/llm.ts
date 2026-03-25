@@ -2,8 +2,11 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const client = new Anthropic({ maxRetries: 2 });
 
-const MODEL = 'claude-opus-4-20250514';
+const MODEL_SONNET = 'claude-sonnet-4-20250514';
+const MODEL_OPUS = 'claude-opus-4-20250514';
 const MAX_TOKENS = 32000;
+
+const MODELS = { sonnet: MODEL_SONNET, opus: MODEL_OPUS } as const;
 
 interface CallClaudeOptions {
   system: string;
@@ -11,6 +14,7 @@ interface CallClaudeOptions {
   outputSchema: Record<string, unknown>;
   outputToolName?: string;
   maxTokens?: number;
+  model?: 'opus' | 'sonnet';
 }
 
 interface CallClaudeResult<T> {
@@ -25,7 +29,7 @@ export async function callClaude<T>(
 
   const response = await client.messages
     .stream({
-      model: MODEL,
+      model: MODELS[options.model ?? 'sonnet'],
       max_tokens: options.maxTokens ?? MAX_TOKENS,
       system: options.system,
       tools: [
@@ -65,7 +69,7 @@ export async function callClaudeWithSearch<T>(
 
   const response = await client.messages
     .stream({
-      model: MODEL,
+      model: MODELS[options.model ?? 'sonnet'],
       max_tokens: options.maxTokens ?? MAX_TOKENS,
       system: options.system,
       tools: [

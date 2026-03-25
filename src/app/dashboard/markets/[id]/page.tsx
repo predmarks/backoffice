@@ -11,6 +11,7 @@ import { StatusBadge } from '../../_components/StatusBadge';
 import { TimingSafetyIndicator } from '../../_components/TimingSafetyIndicator';
 import { MarketActions } from './_components/MarketActions';
 import { HumanFeedback } from './_components/HumanFeedback';
+import { CopyJsonButton } from './_components/CopyJsonButton';
 
 function formatTimestamp(ts: number): string {
   return new Intl.DateTimeFormat('es-AR', {
@@ -356,14 +357,15 @@ export default async function MarketDetailPage({ params }: Props) {
       )}
 
       {/* Deployable JSON Preview */}
-      {(market.status === 'proposal' || market.status === 'approved') && (
-        <div className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
-          <h2 className="text-lg font-bold mb-3">Preview: JSON desplegable</h2>
-          <pre className="bg-gray-50 rounded-lg p-4 text-sm overflow-x-auto">
-            {JSON.stringify(deployable, null, 2)}
-          </pre>
+      <div className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-bold">JSON</h2>
+          <CopyJsonButton json={JSON.stringify(deployable, null, 2)} />
         </div>
-      )}
+        <pre className="bg-gray-50 rounded-lg p-4 text-sm overflow-x-auto">
+          {JSON.stringify(deployable, null, 2)}
+        </pre>
+      </div>
       </div>
 
       {/* Feedback sidebar */}

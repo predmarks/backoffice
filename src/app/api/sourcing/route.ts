@@ -1,13 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { inngest } from '@/inngest/client';
 
-export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => ({}));
-  const count = Math.min(Math.max(Number(body.count) || 10, 1), 50);
-
+export async function POST() {
   await inngest.send({
-    name: 'market/sourcing.requested',
-    data: { count },
+    name: 'signals/ingest.requested',
+    data: {},
   });
 
   return NextResponse.json({ triggered: true });

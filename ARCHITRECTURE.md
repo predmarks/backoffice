@@ -559,14 +559,33 @@ Generate high-quality Argentine market candidates from local data sources, in Sp
 ### Architecture
 
 ```
-Ingestion (fetch signals) → LLM generation → Deduplication → Candidate queue
+Ingestion (news + data + Twitter)
+  → Signal scoring (LLM rates 0-10)
+    → Topic extraction (LLM clusters signals into topics)
+      → Market generation (LLM converts topics into candidates)
+        → Deduplication (embedding cosine similarity)
+          → Save to DB as candidates
 ```
 
-Runs on-demand from the monitoring dashboard (button: "Sugerir N mercados nuevos"). Configurable `CANDIDATE_CAP` (currently 5 for development, target 50 for production).
+The pipeline is split into **two independent Inngest jobs** that can run separately:
+1. **Ingestion job** — fetches signals, scores them, extracts/updates topics, marks stale topics. Runs on cron (Mon/Wed/Fri 9am) or manually.
+2. **Generation job** — loads active topics, generates markets, deduplicates, saves candidates. Runs manually or after ingestion.
+
+A third job, **suggest-topic**, lets the editor describe a topic; Claude researches it via web search, creates the topic, and generates markets from it.
+
+Configurable `CANDIDATE_CAP` (currently 5 for development, target 50 for production).
 
 ### Ingestion layer
 
-Fetches and normalizes signals from all sources:
+Three ingestion streams run in parallel, all persisted to the `signals` table (upsert by URL):
+
+| Stream | File | Source | Signal type |
+|--------|------|--------|-------------|
+| News | `ingestion-news.ts` | RSS feeds (Clarín, La Nación, Infobae, El Cronista, Olé, Ámbito) | `news` |
+| Economic data | `ingestion-data.ts` | BCRA API (reserves, official dollar, monetary base) + Ámbito Financiero (dólar blue) | `data` |
+| Twitter/X trends | `ingestion-twitter.ts` | X API v2 trending topics (Argentina WOEID) | `social` |
+
+Feed URLs, BCRA variables, and X API config are in `src/config/sources.ts`.
 
 ```typescript
 interface SourceSignal {
@@ -574,20 +593,40 @@ interface SourceSignal {
   text: string;                    // Original text (Spanish)
   summary?: string;
   url?: string;
-  source: string;                  // "clarin", "bcra_api", "twitter:@CasaRosada"
+  source: string;                  // "clarin", "bcra_api", "x_trends"
   publishedAt: string;
   entities: string[];
   category?: MarketCategory;
-  dataPoints?: {                   // For BCRA, INDEC, weather
-    metric: string;
-    currentValue: number;
-    previousValue?: number;
-    unit: string;
-  }[];
+  dataPoints?: DataPoint[];        // For BCRA, INDEC, weather
+  score?: number;                  // 0-10, set by scorer
+  scoreReason?: string;
+}
+
+interface DataPoint {
+  metric: string;
+  currentValue: number;
+  previousValue?: number;
+  unit: string;
 }
 ```
 
-**Critical:** For economic data sources (BCRA, INDEC), always fetch **current values** and include them in the signal. The LLM gets real numbers, not stale training data. This directly prevents the hallucination problem.
+**Critical:** For economic data sources (BCRA, Ámbito), always fetch **current values** and include them as `DataPoint[]` in the signal. The LLM gets real numbers, not stale training data. This directly prevents the hallucination problem.
+
+### Signal scoring
+
+After ingestion, `scorer.ts` sends signals to Claude for scoring on 4 dimensions: controversy, temporality, interest, and measurability. Signals scoring 0 (not predictive) are filtered out. Scores are persisted to the `signals` table.
+
+### Topic extraction
+
+`topic-extractor.ts` is the bridge between raw signals and market generation. Instead of generating markets directly from signals, the system:
+
+1. **Clusters signals into topics** — LLM matches signals to existing active topics or creates new ones
+2. **Each topic** has: name, slug, summary, suggested market angles, category, score, linked signals
+3. **Stale detection** — topics with no new signals in 48h are auto-marked as stale
+4. **Editor feedback** — topics can receive feedback from the dashboard; `rescoreTopic()` re-evaluates score considering editor input
+5. **Dismissal** — editors can dismiss topics they don't want markets for
+
+This intermediate layer gives editors control over *what themes* to generate markets for, rather than just accepting whatever the LLM produces.
 
 ### LLM generation prompt
 
@@ -665,13 +704,13 @@ Salteá señales que no dan buenos mercados.
 
 ### Deduplication
 
-Embedding similarity check (Voyage AI or OpenAI `text-embedding-3-small`):
-- vs. open markets: reject at >0.85
-- vs. batch candidates: keep highest-quality version
-- vs. recently rejected (30 days): warn at >0.80
+Embedding similarity check (OpenAI `text-embedding-3-small`):
+- vs. open/approved markets: reject at cosine >0.85
+- vs. batch candidates: keep highest-quality version (by `resolutionCriteria` length)
+- vs. recently rejected (30 days): warn at >0.80 (don't exclude)
 
 ### Output
-Write to database as `status: 'candidate'`.
+Write to database as `status: 'candidate'`. Sets `sourceContext.originType = 'news'`. Triggers `market/candidate.created` event → review pipeline picks it up automatically.
 
 ---
 
@@ -816,7 +855,7 @@ Output:
 }
 ```
 
-### Step 4: Rewrite pass
+### Step 4: Improvement pass (`improver.ts`)
 
 For markets scored `rewrite_then_publish` or with ambiguity < 7 or timingSafety < 7:
 
@@ -1002,11 +1041,14 @@ Markets past `endTimestamp` where the YES condition was not met → auto-flag as
 ```
 Framework:         Next.js 16 (App Router) + TypeScript strict + Tailwind v4
 Deployment:        Vercel
-Database:          Supabase Postgres
+Database:          Supabase Postgres (RLS enabled on all tables)
 ORM:               Drizzle (postgres.js driver)
-Job orchestration: Inngest (step functions, throttle, cancelOn, concurrency)
+Job orchestration: Inngest (step functions, throttle, cancelOn, concurrency, cron)
 LLM:               Claude API (claude-sonnet-4-20250514, maxRetries: 2)
 Web search:        Anthropic tool-use web search (web_search_20250305)
+Embeddings:        OpenAI text-embedding-3-small (deduplication)
+X/Twitter:         X API v2 (trending topics)
+Auth:              Cookie-based sessions (users + sessions tables)
 Notifications:     TODO (Slack webhook planned)
 ```
 
@@ -1022,62 +1064,86 @@ Notifications:     TODO (Slack webhook planned)
 predmarks-market-agents/
 ├── src/
 │   ├── app/
-│   │   ├── layout.tsx                        # Root layout with nav
+│   │   ├── layout.tsx                        # Root layout with session-aware nav
+│   │   ├── _components/                      # Shared UI components
 │   │   ├── api/
 │   │   │   ├── markets/
 │   │   │   │   ├── route.ts                  # GET list, POST create
 │   │   │   │   ├── expand/route.ts           # POST — LLM fills missing market fields
 │   │   │   │   └── [id]/
-│   │   │   │       ├── route.ts              # GET detail
+│   │   │   │       ├── route.ts              # GET detail, PATCH update
 │   │   │   │       ├── approve/route.ts      # POST approve
 │   │   │   │       ├── reject/route.ts       # POST reject
 │   │   │   │       ├── resolve/route.ts      # POST confirm resolution
-│   │   │   │       ├── edit/route.ts         # POST edit + approve
+│   │   │   │       ├── edit/route.ts         # POST edit + optional auto-approve
+│   │   │   │       ├── feedback/route.ts     # POST conversational feedback (Claude agent)
 │   │   │   │       ├── cancel/route.ts       # POST cancel processing
-│   │   │   │       └── resume/route.ts       # POST resume cancelled
+│   │   │   │       ├── resume/route.ts       # POST resume cancelled
+│   │   │   │       ├── archive/route.ts      # POST archive completed market
+│   │   │   │       └── unarchive/route.ts    # POST restore archived market
 │   │   │   ├── review/[id]/route.ts          # POST trigger review pipeline
 │   │   │   ├── export/[id]/route.ts          # GET deployable JSON
+│   │   │   ├── topics/
+│   │   │   │   ├── route.ts                  # GET list active/stale topics
+│   │   │   │   ├── suggest/route.ts          # POST trigger topic suggestion job
+│   │   │   │   └── [id]/
+│   │   │   │       ├── route.ts              # GET topic + linked signals
+│   │   │   │       ├── dismiss/route.ts      # POST dismiss topic
+│   │   │   │       └── feedback/route.ts     # POST add feedback + auto-rescore
+│   │   │   ├── generate/route.ts             # POST trigger market generation from topics
+│   │   │   ├── feedback/
+│   │   │   │   └── all/route.ts              # GET unified feed of all feedback types
+│   │   │   ├── global-feedback/
+│   │   │   │   ├── route.ts                  # GET/POST global instructions
+│   │   │   │   └── [id]/route.ts             # DELETE global feedback entry
 │   │   │   ├── monitoring/
 │   │   │   │   └── activity/route.ts         # GET market monitor data + counts
 │   │   │   ├── sourcing/
-│   │   │   │   ├── route.ts                  # POST trigger sourcing
+│   │   │   │   ├── route.ts                  # POST trigger ingestion pipeline
 │   │   │   │   └── status/route.ts           # GET sourcing run history
 │   │   │   └── inngest/route.ts              # Inngest webhook
 │   │   └── dashboard/
-│   │       ├── page.tsx                      # Monitoring (default view)
-│   │       ├── _components/                  # Shared: StatusBadge, TimingSafetyIndicator, MarketFilters
-│   │       ├── monitoring/
-│   │       │   ├── page.tsx                  # Monitoring (alternate route)
-│   │       │   └── _components/
-│   │       │       ├── MonitoringDashboard.tsx  # Filter cards, market list, actions
-│   │       │       └── SourcingPanel.tsx        # Trigger button + compact run log
+│   │       ├── page.tsx                      # Kanban board (Topics → Candidates → Proposals → Open)
+│   │       ├── _components/                  # Shared: StatusBadge, TimingSafetyIndicator
+│   │       ├── signals/page.tsx              # Signal ingestion: trigger + run log
+│   │       ├── topics/page.tsx               # Topic management: list, generate, dismiss, suggest
+│   │       ├── feedback/page.tsx             # Unified feedback feed + global instructions
 │   │       ├── proposals/page.tsx            # Proposals queue
+│   │       ├── open/page.tsx                 # Open markets with time-remaining indicator
+│   │       ├── archive/page.tsx              # Archived markets with search/filter
 │   │       ├── markets/[id]/
-│   │       │   ├── page.tsx                  # Market detail + activity timeline
+│   │       │   ├── page.tsx                  # Market detail + feedback chat + JSON export
 │   │       │   └── _components/
-│   │       │       └── MarketActions.tsx      # Review/cancel/resume/approve/reject/resolve
-│   │       ├── open/page.tsx                 # Open markets
-│   │       ├── resolution/page.tsx           # Resolution queue
-│   │       └── suggest/page.tsx              # Manual market creation
+│   │       │       ├── MarketActions.tsx      # Review/cancel/resume/approve/reject/resolve
+│   │       │       └── CopyJsonButton.tsx    # Copy deployable JSON to clipboard
+│   │       ├── monitoring/page.tsx           # Redirects to /signals
+│   │       └── suggest/page.tsx              # Redirects to /topics
 │   ├── agents/
 │   │   ├── sourcer/
-│   │   │   ├── ingestion-news.ts             # RSS news ingestion
-│   │   │   ├── generator.ts                  # LLM market generation
-│   │   │   ├── deduplication.ts              # Embedding dedup
-│   │   │   └── index.ts                      # Pipeline orchestrator + CANDIDATE_CAP
+│   │   │   ├── index.ts                      # Pipeline orchestrator + CANDIDATE_CAP
+│   │   │   ├── types.ts                      # SourceSignal, DataPoint, Topic, GeneratedCandidate
+│   │   │   ├── ingestion.ts                  # Coordinator: runs all 3 streams in parallel
+│   │   │   ├── ingestion-news.ts             # RSS feed parser (6 Argentine publications)
+│   │   │   ├── ingestion-data.ts             # BCRA API + Ámbito Financiero (dólar blue)
+│   │   │   ├── ingestion-twitter.ts          # X API v2 trending topics
+│   │   │   ├── scorer.ts                     # LLM signal scoring + topic rescoring
+│   │   │   ├── topic-extractor.ts            # LLM topic clustering + stale detection
+│   │   │   ├── generator.ts                  # LLM market generation (loads feedback + rejections)
+│   │   │   └── deduplication.ts              # OpenAI embedding cosine similarity
 │   │   └── reviewer/
+│   │       ├── index.ts
+│   │       ├── types.ts                      # MarketRecord type
 │   │       ├── data-verifier.ts
 │   │       ├── rules-checker.ts
 │   │       ├── scorer.ts
-│   │       ├── rewriter.ts
-│   │       ├── index.ts
-│   │       └── types.ts                      # MarketRecord type
+│   │       └── improver.ts                   # Iterative market improvement
 │   ├── config/
 │   │   ├── rules.ts                          # H1-H9 hard rules, S1-S6 soft rules
 │   │   ├── contingencies.ts                  # Standard contingency templates
-│   │   └── scoring.ts                        # Weights and thresholds
+│   │   ├── scoring.ts                        # Weights and thresholds
+│   │   └── sources.ts                        # RSS_FEEDS, BCRA_VARIABLES, X API config
 │   ├── db/
-│   │   ├── schema.ts                         # markets + marketEvents + sourcingRuns tables
+│   │   ├── schema.ts                         # All 8 tables (see schema section)
 │   │   ├── types.ts                          # All shared types (Market, Review, EventTypes, etc.)
 │   │   └── client.ts                         # Drizzle client (postgres.js driver)
 │   ├── lib/
@@ -1085,35 +1151,66 @@ predmarks-market-agents/
 │   │   ├── market-events.ts                  # logMarketEvent() helper
 │   │   └── export.ts                         # toDeployableMarket()
 │   └── inngest/
-│       ├── client.ts
-│       ├── sourcing-job.ts                   # On-demand sourcing pipeline
-│       └── review-job.ts                     # Event-driven review with throttle + cancelOn
+│       ├── client.ts                         # Inngest singleton (id: 'predmarks-agents')
+│       ├── review-job.ts                     # Event-driven review with throttle + cancelOn
+│       ├── ingestion-job.ts                  # Cron (Mon/Wed/Fri 9am) + manual signal ingestion
+│       ├── generation-job.ts                 # Manual market generation from topics
+│       └── suggest-topic-job.ts              # Manual topic suggestion via Claude web search
 ├── drizzle.config.ts
 ├── package.json
-└── .env                                      # POSTGRES_URL + ANTHROPIC_API_KEY
+└── .env                                      # POSTGRES_URL + ANTHROPIC_API_KEY + OPENAI_API_KEY + X_BEARER_TOKEN
 ```
 
 ### Inngest job orchestration
 
-```typescript
-// src/inngest/sourcing-job.ts
-export const sourcingJob = inngest.createFunction(
-  { id: 'sourcing-pipeline' },
-  { event: 'market/sourcing.requested' }, // On-demand from dashboard
-  async ({ event, step }) => {
-    // Each step is a separate function invocation (<60s each)
-    // Steps tracked in sourcingRuns table with step-by-step progress
-    const signals = await step.run('ingest', () => ingestSignals());
-    const candidates = await step.run('generate', () => generateMarkets(signals));
-    const unique = await step.run('dedup', () => deduplicateCandidates(candidates));
-    await step.run('save', () => saveCandidates(unique));
+Four jobs registered in the Inngest webhook (`src/app/api/inngest/route.ts`):
 
-    // Trigger review for each new candidate
-    await step.run('trigger-reviews', () => {
-      for (const c of unique) {
-        inngest.send({ name: 'market/candidate.created', data: { id: c.id } });
-      }
-    });
+```typescript
+// src/inngest/ingestion-job.ts
+export const ingestionJob = inngest.createFunction(
+  { id: 'ingestion-pipeline', retries: 1 },
+  [
+    { cron: '0 9 * * 1,3,5' },              // Mon/Wed/Fri 9am
+    { event: 'signals/ingest.requested' },   // Manual from dashboard
+  ],
+  async ({ step }) => {
+    // Tracked in sourcingRuns table with step-by-step progress
+    const signals = await step.run('ingest', () => ingestAllSources());
+    await step.run('mark-used', () => markSignalsUsed(runId));
+    const topics = await step.run('extract-topics', () => updateTopics(signals));
+    await step.run('mark-stale', () => markStaleTopics());
+    // Returns: { status, runId, topicIds }
+  }
+);
+
+// src/inngest/generation-job.ts
+export const generationJob = inngest.createFunction(
+  { id: 'generation-pipeline' },
+  { event: 'markets/generate.requested' },   // Manual or post-ingestion
+  async ({ event, step }) => {
+    // event.data: { topicIds?: string[], count?: number }
+    const topics = await step.run('load-topics', () => /* by ID or active with fresh signals */);
+    const openMarkets = await step.run('load-open', () => /* open/approved markets */);
+    const candidates = await step.run('generate', () => generateMarkets(topics, dataPoints, openTitles));
+    const unique = await step.run('dedup', () => deduplicateCandidates(candidates, openMarkets));
+    const ids = await step.run('save', () => saveCandidates(unique));
+    await step.run('update-topics', () => /* set lastGeneratedAt on used topics */);
+    // Returns: { status, candidates: count, savedIds }
+    // Each saved candidate triggers market/candidate.created → review pipeline
+  }
+);
+
+// src/inngest/suggest-topic-job.ts
+export const suggestTopicJob = inngest.createFunction(
+  { id: 'suggest-topic' },
+  { event: 'topics/suggest.requested' },     // Manual from dashboard
+  async ({ event, step }) => {
+    // event.data: { description: string, count?: number }
+    const research = await step.run('research', () => /* Claude web search */);
+    const topic = await step.run('save-topic', () => /* persist to topics table */);
+    const candidates = await step.run('generate', () => /* generate N markets from topic */);
+    await step.run('save-candidates', () => /* persist to markets table */);
+    // Returns: { topicId, candidatesCount }
   }
 );
 
@@ -1131,157 +1228,171 @@ export const reviewJob = inngest.createFunction(
   },
   { event: 'market/candidate.created' },
   async ({ event, step }) => {
-    // Iterative pipeline: verify → check rules → score → (rewrite → re-check → re-score) → propose/reject
+    // Iterative pipeline: verify → check rules → score → (improve → re-check → re-score) → propose/reject
+    // Loads human feedback, global feedback, and triage rejections for context
     // Supports resume: loads iteration state from DB, skips completed iterations
     // Emits marketEvents at each step for monitoring dashboard
     // Max 3 iterations of improve → re-check → re-score before final decision
+    // Hard rule failure on unfixable rules → immediate rejection
+    // Score >= 80 (proposalScore threshold) → promote to 'proposal'
+    // Returns: { status: 'proposal'|'rejected', marketId, iteration, score }
   }
 );
 
-// src/inngest/resolution-job.ts
-export const resolutionJob = inngest.createFunction(
-  { id: 'resolution-check' },
-  { cron: '0 */6 * * *' },  // Base: every 6h
-  async ({ step }) => {
-    const markets = await step.run('load', () => db.markets.find({ status: 'open' }));
-
-    for (const market of markets) {
-      const hoursToClose = diffHours(market.endTimestamp, now());
-      const isUrgent = hoursToClose < 72;
-      const wasUnclear = market.lastCheckResult === 'unclear';
-
-      // Skip if checked recently (respecting tier)
-      if (!isUrgent && !wasUnclear && market.lastCheckedAt > hoursAgo(6)) continue;
-
-      const result = await step.run(`check-${market.id}`, () => checkResolution(market));
-
-      if (result.isEmergency) {
-        await step.run(`emergency-${market.id}`, () => sendEmergencyAlert(market, result));
-      } else if (result.status === 'resolved') {
-        await step.run(`flag-${market.id}`, () => flagForResolution(market, result));
-      }
-    }
-  }
-);
-
-// Urgent check — runs more frequently
-export const urgentResolutionJob = inngest.createFunction(
-  { id: 'urgent-resolution-check' },
-  { cron: '0 * * * *' },  // Every hour
-  async ({ step }) => {
-    const markets = await step.run('load', () =>
-      db.markets.find({
-        status: 'open',
-        $or: [
-          { endTimestamp: { $lt: hoursFromNow(72) } },
-          { timingSafety: 'caution' },
-        ]
-      })
-    );
-    // ... same check logic
-  }
-);
+// Resolution jobs — TODO (see Agent 3: Resolution Checker spec)
 ```
 
 ---
 
 ## Human review dashboard
 
-### Monitoring (default view at `/dashboard`)
+### Kanban pipeline (default view at `/dashboard`)
 
-The monitoring page is the operational hub. It shows:
-
-1. **Header** with "Sugerir N mercados nuevos" button (triggers sourcing pipeline)
-2. **Filter cards** — clickable status cards showing counts:
-   - "En revisión" (candidate + processing combined)
-   - "Propuestas", "Abiertos", "Rechazados", "Cancelados"
-   - Clicking filters the market list; clicking again clears the filter
-3. **Market list** — each row shows:
-   - Status dot (color-coded, animated pulse for processing)
-   - Title (links to detail page)
-   - Status label + context detail (pipeline step for processing, score for proposals, "X iteraciones previas" for re-candidates)
-   - Inline action buttons: "Revisar" for candidates, "Cancelar" for processing, "Reanudar" for cancelled/stale
-   - Elapsed timer (live amber for processing, frozen gray for completed)
-   - Category
-4. **Sourcing log** — compact expandable run history at the bottom
-   - One-line summaries: status + date + signal/candidate counts
-   - Click to expand step-by-step detail
-
-Polling: 5s when processing markets exist, 30s otherwise. Live timer ticks every 1s.
-
-Stale detection: processing markets with no events in 5+ min are flagged as "Estancado" with a resume button (Inngest job likely died).
-
-### Market detail page
-
-Full market info + activity timeline showing all pipeline events:
-- `pipeline_started`, `pipeline_resumed`, `data_verified`, `rules_checked`, `scored`, `improved`, `pipeline_proposed`, `pipeline_rejected`, `pipeline_cancelled`
-- Human actions: `human_approved`, `human_rejected`, `human_edited`
-
-Events are logged via `logMarketEvent()` at each pipeline step and API action.
-
-### Review queue
-
-Each candidate card shows everything needed to approve in <2 minutes:
+The main page is a **4-column resizable Kanban board** for rapid triage:
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  "¿Superará el dólar blue los $1.500 antes del 30 de junio?"│
-│  Economía · Score: 7.8/10                                    │
-│                                                               │
-│  Scores                                                       │
-│  Ambigüedad: 8/10 · Timing: 9/10 · Actualidad: 7/10         │
-│  Volumen: 7/10                                                │
-│                                                               │
-│  Verificación de datos                                        │
-│  ✅ Dólar blue actual: $1.340 (ámbito.com, hoy)              │
-│  ✅ Fuente "ámbito.com/dolar" existe y es pública             │
-│                                                               │
-│  Timing: ✅ SAFE — cierra 29/06, dato se verifica 30/06      │
-│                                                               │
-│  ⚠ S4: evento de un solo momento (puede no oscilar mucho)    │
-│                                                               │
-│  Preview del JSON desplegable:                                │
-│  { name: "¿Superará...", description: "Este mercado se       │
-│    resolverá como Sí si...", endTimestamp: 1751241000 }       │
-│                                                               │
-│  [Aprobar] [Aprobar con rewrite] [Editar] [Rechazar]         │
-└──────────────────────────────────────────────────────────────┘
+Topics → Candidates → Proposals → Open Markets
 ```
 
-### Resolution queue
+Each column shows relevant items with inline actions and bulk operations. This replaces the previous monitoring-centric default view.
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  "¿Aprobará el Senado la reforma jubilatoria antes del 15/7?"│
-│  CERRADO (cerró 14/07) · Confianza: ALTA                     │
-│  Resultado sugerido: NO                                       │
-│                                                               │
-│  Evidencia:                                                   │
-│  "El proyecto no alcanzó quórum en la sesión del 12/07..."    │
-│  Fuentes: La Nación, Clarín, actas HCDN                      │
-│                                                               │
-│  [Resolver Sí] [Resolver No] [Necesita más investigación]    │
-└──────────────────────────────────────────────────────────────┘
-```
+### Signals page (`/dashboard/signals`)
+
+The operational hub for signal ingestion:
+- Trigger ingestion button (sends `signals/ingest.requested` event)
+- Run log with step-by-step progress (via `SourcingPanel` component)
+- Each run shows: status, date, signal/candidate counts, expandable step detail
+
+### Topics page (`/dashboard/topics`)
+
+Topic management interface:
+- List active/stale topics ordered by score
+- Select topics and trigger market generation
+- Dismiss topics (with optional reason)
+- Suggest new topics (triggers `suggestTopicJob` via Claude web search)
+- Bulk actions for efficiency
+
+### Feedback page (`/dashboard/feedback`)
+
+Unified feedback feed showing all types:
+- Global instructions (add/view/delete)
+- Market rejections with reasons
+- Market-specific conversational feedback
+- Topic feedback and dismissals
+
+### Other pages
+
+- `/dashboard/proposals` — proposals queue
+- `/dashboard/open` — open markets sorted by `endTimestamp` with time-remaining indicator
+- `/dashboard/archive` — archived markets with search/filter by title and status
+- `/dashboard/monitoring` → redirects to `/dashboard/signals`
+- `/dashboard/suggest` → redirects to `/dashboard/topics`
+
+### Market detail page (`/dashboard/markets/[id]`)
+
+Full market info + activity timeline + conversational feedback chat:
+- All review data, iteration history, scores
+- **Human feedback chat** — conversational interface powered by Claude agent with tool-use (`save_feedback` tool). Editors can discuss the market; Claude provides analysis and persists key insights.
+- **Copy JSON button** — copies deployable JSON to clipboard
+- Context-aware action buttons: review, cancel, resume, approve, reject, edit, resolve, archive
+
+Events are logged via `logMarketEvent()` at each pipeline step and API action:
+- Pipeline events: `pipeline_started`, `pipeline_resumed`, `data_verified`, `rules_checked`, `scored`, `improved`, `pipeline_proposed`, `pipeline_rejected`, `pipeline_cancelled`
+- Human actions: `human_approved`, `human_rejected`, `human_edited`, `human_feedback`, `archived`, `unarchived`
+
+Stale detection: processing markets with no events in 5+ min are flagged as "Estancado" with a resume button.
 
 ### API endpoints
 
+**Markets**
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/markets` | List markets, POST create |
-| GET | `/api/markets/:id` | Full detail with review, verification, scores |
-| POST | `/api/markets/:id/approve` | Approve → deploy (moves to open) |
-| POST | `/api/markets/:id/reject` | Reject with reason |
-| POST | `/api/markets/:id/edit` | Human edits then approves |
+| GET/POST | `/api/markets` | List markets (with `?status=` filter), create new market |
+| GET/PATCH | `/api/markets/:id` | Full detail / generic update |
+| POST | `/api/markets/:id/approve` | Approve → moves to approved/open |
+| POST | `/api/markets/:id/reject` | Reject with optional reason |
+| POST | `/api/markets/:id/edit` | Human edits + optional auto-approve |
+| POST | `/api/markets/:id/feedback` | Conversational feedback (Claude agent with `save_feedback` tool) |
 | POST | `/api/markets/:id/resolve` | Confirm resolution (Si or No) |
-| POST | `/api/markets/:id/cancel` | Cancel processing → cancelled (sends Inngest cancel event) |
-| POST | `/api/markets/:id/resume` | Resume cancelled → candidate (re-triggers pipeline) |
+| POST | `/api/markets/:id/cancel` | Cancel processing → sends Inngest cancel event |
+| POST | `/api/markets/:id/resume` | Resume cancelled → back to candidate |
+| POST | `/api/markets/:id/archive` | Archive completed market |
+| POST | `/api/markets/:id/unarchive` | Restore archived market |
 | POST | `/api/markets/expand` | LLM fills missing fields for manual market creation |
 | POST | `/api/review/:id` | Trigger review pipeline for a candidate |
 | GET | `/api/export/:id` | Get deployable JSON for a market |
-| GET | `/api/monitoring/activity` | Market monitor data with counts (supports `?status=` filter, comma-separated) |
-| POST | `/api/sourcing` | Trigger sourcing pipeline |
-| GET | `/api/sourcing/status` | Sourcing run history + candidateCap |
+
+**Topics**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/topics` | List active/stale topics ordered by score |
+| GET | `/api/topics/:id` | Topic detail + linked signals |
+| POST | `/api/topics/:id/dismiss` | Dismiss topic (optional reason → feedback) |
+| POST | `/api/topics/:id/feedback` | Add feedback + auto-rescore via LLM |
+| POST | `/api/topics/suggest` | Trigger topic suggestion job (Claude web search) |
+
+**Generation & Sourcing**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/generate` | Trigger market generation from topics |
+| POST | `/api/sourcing` | Trigger signal ingestion pipeline |
+| GET | `/api/sourcing/status` | Sourcing run history (list or single-run detail) |
+
+**Feedback**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/POST | `/api/global-feedback` | List / add global instructions |
+| DELETE | `/api/global-feedback/:id` | Delete global feedback entry |
+| GET | `/api/feedback/all` | Unified feed of all feedback types |
+
+**Monitoring**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/monitoring/activity` | Market monitor data with status counts, stale detection |
+
+---
+
+## Database schema
+
+8 tables, all with RLS enabled:
+
+| Table | Purpose |
+|-------|---------|
+| `markets` | Core market data: content, timing, status, review results (JSONB), iterations (JSONB), resolution (JSONB), `isArchived` flag |
+| `marketEvents` | Audit trail: every pipeline step + human action with type, iteration, detail (JSONB) |
+| `sourcingRuns` | Ingestion pipeline runs with step-by-step progress, signal/candidate counts, error tracking |
+| `signals` | Ingested signals from all sources. Upsert by URL. Includes `dataPoints[]`, `score`, `scoreReason`, `usedInRun` FK |
+| `topics` | Extracted themes: name, slug (unique), summary, `suggestedAngles[]`, category, score, status (active/stale/dismissed), `feedback` (JSONB array), `lastSignalAt`, `lastGeneratedAt` |
+| `topicSignals` | Junction table linking topics ↔ signals |
+| `globalFeedback` | Persistent editor instructions loaded by generation agent |
+| `users` / `sessions` | Authentication: username/password hash, cookie-based session tokens |
+
+Key indexes: `markets(status)`, `markets(status, createdAt)`, `signals(url)` unique, `signals(createdAt)`, `signals(score)`, `topics(status)`, `topics(score)`.
+
+---
+
+## Feedback & learning system
+
+The system has a multi-layered feedback loop that improves market generation over time:
+
+1. **Global feedback** (`globalFeedback` table) — Persistent editor instructions (e.g., "avoid markets about cryptocurrency"). Loaded by the generator agent on every run.
+2. **Rejection feedback** — When editors reject markets, the reason is logged as a `marketEvent`. The generator loads recent rejections (30 days) to avoid repeating mistakes.
+3. **Market conversational feedback** — Claude-powered chat on each market's detail page. The editor discusses the market; Claude analyzes it and uses a `save_feedback` tool to persist key insights.
+4. **Topic feedback** — Editors can leave feedback on topics. `rescoreTopic()` re-evaluates the topic's score considering the new feedback.
+5. **Topic dismissal** — Editors can dismiss topics entirely (with optional reason), preventing further market generation from them.
+
+This creates a learning loop: editor feedback → persisted insights → loaded into generation prompts → better candidates.
+
+---
+
+## Authentication
+
+Cookie-based session auth with `users` and `sessions` tables. Basic auth middleware protects dashboard and API routes. Nav only renders when `session_token` cookie exists.
 
 ---
 
@@ -1297,7 +1408,8 @@ const EVENT_TYPES = [
   'data_verified', 'rules_checked', 'scored', 'improved',
   'pipeline_proposed', 'pipeline_rejected',
   'human_approved', 'human_rejected', 'human_edited',
-  'pipeline_cancelled',
+  'human_feedback', 'pipeline_cancelled',
+  'archived', 'unarchived',
   'status_changed',
 ] as const;
 ```
@@ -1306,17 +1418,17 @@ Each event includes: `marketId`, `type`, optional `iteration` number, optional `
 
 ### Sourcing runs
 
-Sourcing pipeline runs are tracked in the `sourcing_runs` table with step-by-step progress:
+Ingestion pipeline runs are tracked in the `sourcing_runs` table with step-by-step progress:
 
 ```typescript
 interface SourcingStep {
-  name: string;    // 'check-cap' | 'ingest' | 'generate' | 'dedup' | 'save' | 'trigger-reviews'
+  name: string;    // 'ingest' | 'mark-used' | 'extract-topics' | 'mark-stale'
   status: string;  // 'pending' | 'running' | 'done' | 'error'
   detail?: string;
 }
 ```
 
-Each run tracks: `status`, `steps` (JSONB array), `signalsCount`, `candidatesGenerated`, `candidatesSaved`, `error`, timestamps.
+Each run tracks: `status`, `currentStep`, `steps` (JSONB array), `signals` (JSONB), `topics` (JSONB), `signalsCount`, `candidatesGenerated`, `candidatesSaved`, `error`, timestamps.
 
 ### Rate limit protection
 
@@ -1369,34 +1481,50 @@ rather than running on a fixed schedule.
 
 ### Phase 1: Foundation — DONE
 - Next.js project + Vercel deployment
-- Drizzle schema + Supabase Postgres (markets, marketEvents, sourcingRuns tables)
+- Drizzle schema + Supabase Postgres
 - Claude API wrapper with structured output (`callClaude`, `callClaudeWithSearch`)
 - Rules module (`rules.ts`, `contingencies.ts`, `scoring.ts`)
-- Dashboard UI (monitoring, detail, proposals, open, resolution, suggest pages)
+- Dashboard UI
 - `toDeployableMarket()` export function
 
 ### Phase 2: Reviewer Agent — DONE
 - Data verification step (web search via Claude tool-use)
 - Hard rules checker (H1-H9)
 - Quality scorer with timing safety (weighted scoring)
-- Iterative rewrite pass (up to 3 iterations of improve → re-check → re-score)
+- Iterative improvement pass (up to 3 iterations of improve → re-check → re-score)
 - Inngest step function with throttle, concurrency, cancelOn
 - Dashboard: approve/reject/edit/cancel/resume flow
 - Deployable JSON preview + export
 - Market events audit trail
 
 ### Phase 3: Sourcer Agent — DONE
-- RSS/news ingestion (Argentine publications)
-- LLM generation step with deduplication
-- Sourcing runs tracked with step-by-step progress
-- On-demand trigger from monitoring dashboard
+- Multi-source ingestion: RSS (6 Argentine publications), BCRA API, Ámbito Financiero (dólar blue), X/Twitter trends
+- Signal persistence in DB with scoring (LLM rates 0-10)
+- Topic extraction layer (LLM clusters signals into topics)
+- Topic management: feedback, rescoring, stale detection, dismissal
+- LLM market generation with deduplication (OpenAI embeddings)
+- Feedback learning loop: global instructions + rejection history + conversational feedback loaded into generation prompts
+- Cron-based ingestion (Mon/Wed/Fri 9am) + manual trigger
+- Separate ingestion and generation jobs for flexibility
+- Topic suggestion via Claude web search
 - Configurable CANDIDATE_CAP
 - Wire to Reviewer via Inngest events (`market/candidate.created`)
+
+### Phase 3.5: Dashboard & UX — DONE
+- Kanban pipeline board (Topics → Candidates → Proposals → Open)
+- Signals page with ingestion trigger + run log
+- Topics page with management, generation trigger, suggestion
+- Conversational market feedback (Claude agent with tool-use)
+- Unified feedback page (all types)
+- Market archive system
+- Authentication (users, sessions, cookie-based)
+- Copy-to-clipboard deployable JSON
 
 ### Phase 4: Resolution Checker — TODO
 - Search query builder
 - Resolution evaluator
 - Emergency settlement detector
+- Fixture/schedule change monitoring
 - Tiered scheduling (6h / 1h / 15min)
 - Dashboard: resolution confirmation
 - Slack alerts
@@ -1405,4 +1533,4 @@ rather than running on a fixed schedule.
 - Prompt tuning from real results
 - Multiple-choice market support
 - Weather market pipeline optimization
-- Cron-based sourcing schedule
+- Cost tracking and metrics dashboard

@@ -68,6 +68,7 @@ export const sourcingRuns = pgTable('sourcing_runs', {
   currentStep: varchar('current_step', { length: 30 }).notNull().default('check-cap'),
   steps: jsonb('steps').notNull().default([]).$type<SourcingStep[]>(),
   signals: jsonb('signals').$type<SourceSignal[]>(),
+  topics: jsonb('topics').$type<import('@/agents/sourcer/types').Topic[]>(),
   signalsCount: integer('signals_count'),
   candidatesGenerated: integer('candidates_generated'),
   candidatesSaved: integer('candidates_saved'),
@@ -100,6 +101,42 @@ export const signals = pgTable(
     index('signals_score_idx').on(table.score),
   ],
 ).enableRLS();
+
+export const topics = pgTable(
+  'topics',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: text('name').notNull(),
+    slug: varchar('slug', { length: 100 }).notNull().unique(),
+    summary: text('summary').notNull(),
+    category: varchar('category', { length: 30 }).notNull(),
+    suggestedAngles: jsonb('suggested_angles').notNull().default([]).$type<string[]>(),
+    score: real('score').notNull().default(0),
+    status: varchar('status', { length: 20 }).notNull().default('active'),
+    signalCount: integer('signal_count').notNull().default(0),
+    lastSignalAt: timestamp('last_signal_at'),
+    lastGeneratedAt: timestamp('last_generated_at'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    feedback: jsonb('feedback').default([]).$type<{ text: string; createdAt: string }[]>(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => [
+    index('topics_status_idx').on(table.status),
+    index('topics_score_idx').on(table.score),
+  ],
+).enableRLS();
+
+export const topicSignals = pgTable(
+  'topic_signals',
+  {
+    topicId: uuid('topic_id').notNull().references(() => topics.id),
+    signalId: uuid('signal_id').notNull().references(() => signals.id),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    index('topic_signals_topic_idx').on(table.topicId),
+  ],
+);
 
 export const globalFeedback = pgTable('global_feedback', {
   id: uuid('id').defaultRandom().primaryKey(),

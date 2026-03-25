@@ -1,24 +1,5 @@
-'use client';
-
-import { SourcingTrigger, SourcingLog, useSourcingData } from './_components/SourcingPanel';
-import { MonitoringDashboard } from './_components/MonitoringDashboard';
+import { redirect } from 'next/navigation';
 
 export default function MonitoringPage() {
-  const { runs, loading, triggering, hasRunning, runningStep, handleTrigger } = useSourcingData();
-
-  return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Monitoreo</h1>
-        <SourcingTrigger
-          triggering={triggering}
-          hasRunning={hasRunning}
-          runningStep={runningStep}
-          onTrigger={handleTrigger}
-        />
-      </div>
-      <MonitoringDashboard />
-      <SourcingLog runs={runs} loading={loading} />
-    </div>
-  );
+  redirect('/dashboard/signals');
 }

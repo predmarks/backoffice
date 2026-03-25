@@ -2,6 +2,7 @@ import { db } from '@/db/client';
 import { markets } from '@/db/schema';
 import { eq, sql, inArray } from 'drizzle-orm';
 import { ingestAllSources } from './ingestion';
+import { extractTopics } from './topic-extractor';
 import { generateMarkets } from './generator';
 import { deduplicateCandidates } from './deduplication';
 import type { GeneratedCandidate } from './types';
@@ -29,6 +30,10 @@ export async function runSourcing(): Promise<{ candidateIds: string[] }> {
     return { candidateIds: [] };
   }
 
+  // Extract topics
+  const topics = await extractTopics(signals);
+  console.log(`Extracted ${topics.length} topics`);
+
   // Load open market titles for dedup context
   const openMarkets = await db
     .select({ id: markets.id, title: markets.title })
@@ -37,7 +42,7 @@ export async function runSourcing(): Promise<{ candidateIds: string[] }> {
 
   // Generate candidates
   const candidates = await generateMarkets(
-    signals,
+    topics,
     dataPoints,
     openMarkets.map((m) => m.title),
   );
@@ -78,7 +83,7 @@ async function saveCandidates(candidates: GeneratedCandidate[]): Promise<string[
         tags: candidate.tags,
         endTimestamp: candidate.endTimestamp,
         expectedResolutionDate: candidate.expectedResolutionDate,
-        timingSafety: 'caution', // Reviewer will validate
+        timingSafety: 'caution',
         sourceContext: {
           originType: 'news' as const,
           generatedAt: new Date().toISOString(),

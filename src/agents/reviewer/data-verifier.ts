@@ -82,6 +82,7 @@ Today's date: ${new Date().toISOString().split('T')[0]}`;
     system: SYSTEM_PROMPT,
     userMessage,
     outputSchema: OUTPUT_SCHEMA,
+    model: 'opus',
   });
 
   return result;

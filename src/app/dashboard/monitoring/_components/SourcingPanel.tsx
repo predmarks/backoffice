@@ -19,10 +19,7 @@ interface SourcingRun {
 const STEP_LABELS: Record<string, string> = {
   'check-cap': 'Verificar capacidad',
   'ingest': 'Ingerir señales',
-  'score': 'Puntuar señales',
-  'generate': 'Generar candidatos',
-  'dedup': 'Deduplicar',
-  'save': 'Guardar en DB',
+  'update-topics': 'Actualizar temas',
 };
 
 function formatDate(dateStr: string): string {
@@ -36,9 +33,9 @@ function formatDate(dateStr: string): string {
 }
 
 function StepIndicator({ step }: { step: SourcingStep }) {
-  const icon = step.status === 'done' ? '✓' :
-    step.status === 'running' ? '●' :
-    step.status === 'error' ? '✗' : '○';
+  const icon = step.status === 'done' ? '\u2713' :
+    step.status === 'running' ? '\u25CF' :
+    step.status === 'error' ? '\u2717' : '\u25CB';
 
   const color = step.status === 'done' ? 'text-green-600' :
     step.status === 'running' ? 'text-blue-600 animate-pulse' :
@@ -59,10 +56,11 @@ function StepIndicator({ step }: { step: SourcingStep }) {
 
 function useSourcingData() {
   const [runs, setRuns] = useState<SourcingRun[]>([]);
-  const [candidateCap, setCandidateCap] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [justTriggered, setJustTriggered] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const triggerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchRuns = useCallback(async () => {
     try {
@@ -70,7 +68,6 @@ function useSourcingData() {
       if (res.ok) {
         const data = await res.json();
         setRuns(data.runs);
-        if (data.candidateCap) setCandidateCap(data.candidateCap);
       }
     } catch {
       // ignore
@@ -82,27 +79,48 @@ function useSourcingData() {
   }, [fetchRuns]);
 
   const hasRunning = runs.some((r) => r.status === 'running');
+
+  // Clear justTriggered once a running run is detected
   useEffect(() => {
-    if (hasRunning) {
+    if (hasRunning && justTriggered) {
+      setJustTriggered(false);
+      if (triggerTimeoutRef.current) {
+        clearTimeout(triggerTimeoutRef.current);
+        triggerTimeoutRef.current = null;
+      }
+    }
+  }, [hasRunning, justTriggered]);
+
+  // Poll while hasRunning OR justTriggered (waiting for run to appear)
+  const shouldPoll = hasRunning || justTriggered;
+  useEffect(() => {
+    if (shouldPoll) {
       pollRef.current = setInterval(fetchRuns, 3000);
     }
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
     };
-  }, [hasRunning, fetchRuns]);
+  }, [shouldPoll, fetchRuns]);
 
-  async function handleTrigger(count: number) {
+  async function handleTrigger() {
     setTriggering(true);
     try {
       const res = await fetch('/api/sourcing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count }),
+        body: JSON.stringify({}),
       });
       if (!res.ok) throw new Error('Failed');
+      setJustTriggered(true);
       setLoading(true);
-      setTimeout(fetchRuns, 1000);
       setTimeout(() => setLoading(false), 2000);
+      // Safety timeout: clear justTriggered after 30s if run never appears
+      triggerTimeoutRef.current = setTimeout(() => {
+        setJustTriggered(false);
+      }, 30000);
     } catch {
       // ignore
     } finally {
@@ -113,7 +131,7 @@ function useSourcingData() {
   const runningRun = runs.find((r) => r.status === 'running');
   const runningStep = runningRun?.currentStep;
 
-  return { runs, candidateCap, loading, triggering, hasRunning, runningStep, handleTrigger };
+  return { runs, loading, triggering: triggering || justTriggered, hasRunning, runningStep, handleTrigger };
 }
 
 export function SourcingTrigger({
@@ -125,30 +143,17 @@ export function SourcingTrigger({
   triggering: boolean;
   hasRunning: boolean;
   runningStep?: string;
-  onTrigger: (count: number) => void;
+  onTrigger: () => void;
 }) {
-  const [count, setCount] = useState(10);
-
   return (
     <div className="flex flex-col items-end gap-1">
-      <div className="flex items-center gap-2">
-        <input
-          type="number"
-          min={1}
-          max={50}
-          value={count}
-          onChange={(e) => setCount(Math.min(50, Math.max(1, Number(e.target.value) || 1)))}
-          disabled={triggering || hasRunning}
-          className="w-16 px-2 py-2 text-sm border border-gray-300 rounded-md text-center disabled:opacity-50"
-        />
-        <button
-          onClick={() => onTrigger(count)}
-          disabled={triggering || hasRunning}
-          className="px-4 py-2 text-sm font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 transition-colors"
-        >
-          {triggering ? 'Iniciando...' : hasRunning ? 'En progreso...' : 'Generar mercados'}
-        </button>
-      </div>
+      <button
+        onClick={() => onTrigger()}
+        disabled={triggering || hasRunning}
+        className="px-4 py-2 text-sm font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 transition-colors"
+      >
+        {triggering ? 'Iniciando...' : hasRunning ? 'En progreso...' : 'Ingerir señales'}
+      </button>
       {hasRunning && runningStep && (
         <span className="text-xs text-blue-600 animate-pulse">
           {STEP_LABELS[runningStep] || runningStep}...
@@ -171,9 +176,7 @@ function RunSummary({ run }: { run: SourcingRun }) {
 
   const stats = [
     run.signalsCount != null ? `${run.signalsCount} señales` : null,
-    run.candidatesGenerated != null ? `${run.candidatesGenerated} generados` : null,
-    run.candidatesSaved != null ? `${run.candidatesSaved} guardados` : null,
-  ].filter(Boolean).join(' · ');
+  ].filter(Boolean).join(' \u00B7 ');
 
   return (
     <span className="flex items-center gap-2 text-xs">
@@ -213,10 +216,13 @@ function SignalList({ runId }: { runId: string }) {
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch(`/api/sourcing/status?runId=${runId}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled) setSignals(data.run?.signals ?? null);
+        const signalRes = await fetch(`/api/sourcing/status?runId=${runId}`);
+        if (signalRes.ok) {
+          const data = await signalRes.json();
+          if (!cancelled) {
+            setSignals(data.run?.signals ?? null);
+          }
+        }
       } catch {
         // ignore
       } finally {
@@ -227,10 +233,10 @@ function SignalList({ runId }: { runId: string }) {
     return () => { cancelled = true; };
   }, [runId]);
 
-  if (loading) return <div className="text-xs text-gray-400 py-2">Cargando señales...</div>;
-  if (!signals || signals.length === 0) return <div className="text-xs text-gray-400 py-2">Sin señales registradas</div>;
+  if (loading) return <div className="text-xs text-gray-400 py-2">Cargando...</div>;
 
-  // Group by source
+  if (!signals || signals.length === 0) return <div className="text-xs text-gray-400 py-2">Sin datos registrados</div>;
+
   const grouped = new Map<string, Signal[]>();
   for (const s of signals) {
     const list = grouped.get(s.source) ?? [];
@@ -240,7 +246,6 @@ function SignalList({ runId }: { runId: string }) {
 
   return (
     <div className="space-y-3 mt-2">
-      <h4 className="text-xs font-medium text-gray-600">Señales consumidas ({signals.length})</h4>
       {Array.from(grouped.entries()).map(([source, items]) => (
         <div key={source}>
           <div className="text-xs font-medium text-gray-500 mb-1">{source} ({items.length})</div>
@@ -297,7 +302,7 @@ function SourcingLog({ runs, loading }: { runs: SourcingRun[]; loading: boolean 
   return (
     <div className="bg-white rounded-lg border border-gray-200">
       <div className="px-4 py-2 border-b border-gray-100">
-        <h3 className="text-sm font-medium text-gray-700">Sourcing</h3>
+        <h3 className="text-sm font-medium text-gray-700">Ingestion</h3>
       </div>
       {loading && runs.length === 0 && (
         <div className="px-4 py-3 text-xs text-gray-500">Iniciando pipeline...</div>
@@ -312,7 +317,7 @@ function SourcingLog({ runs, loading }: { runs: SourcingRun[]; loading: boolean 
                 className="w-full flex items-center justify-between px-4 py-2 hover:bg-gray-50 transition-colors"
               >
                 <RunSummary run={run} />
-                <span className="text-gray-400 text-xs ml-2">{isExpanded ? '▲' : '▼'}</span>
+                <span className="text-gray-400 text-xs ml-2">{isExpanded ? '\u25B2' : '\u25BC'}</span>
               </button>
               {isExpanded && (
                 <div className="px-4 pb-3 pt-1 bg-gray-50">
@@ -365,7 +370,7 @@ export function SourcingPanelView({
   triggering: boolean;
   hasRunning: boolean;
   runningStep?: string;
-  onTrigger: (count: number) => void;
+  onTrigger: () => void;
 }) {
   return (
     <>

@@ -23,14 +23,27 @@ async function test() {
   }
   console.log('');
 
-  // Step 2: Generate markets
-  console.log('=== Step 2: Generation ===');
+  // Step 2: Extract topics
+  console.log('=== Step 2: Topic Extraction ===');
+  const { extractTopics } = await import('../src/agents/sourcer/topic-extractor');
+  const topics = await extractTopics(signals);
+  console.log(`Extracted ${topics.length} topics:`);
+  for (const t of topics) {
+    console.log(`  - [${t.category}] ${t.name} (score: ${t.score})`);
+    for (const a of t.suggestedAngles) {
+      console.log(`    → ${a}`);
+    }
+  }
+  console.log('');
+
+  // Step 3: Generate markets
+  console.log('=== Step 3: Generation ===');
   const { generateMarkets } = await import('../src/agents/sourcer/generator');
 
   // Load open market titles
   const postgres = (await import('postgres')).default;
   const { drizzle } = await import('drizzle-orm/postgres-js');
-  const { eq, inArray } = await import('drizzle-orm');
+  const { inArray } = await import('drizzle-orm');
   const schema = await import('../src/db/schema');
 
   const sql = postgres(process.env.POSTGRES_URL!, { prepare: false });
@@ -42,7 +55,7 @@ async function test() {
     .where(inArray(schema.markets.status, ['open', 'approved']));
 
   const candidates = await generateMarkets(
-    signals,
+    topics,
     dataPoints,
     openMarkets.map((m) => m.title),
   );
@@ -54,9 +67,9 @@ async function test() {
     console.log('');
   }
 
-  // Step 3: Deduplication
+  // Step 4: Deduplication
   if (candidates.length > 0 && process.env.OPENAI_API_KEY) {
-    console.log('=== Step 3: Deduplication ===');
+    console.log('=== Step 4: Deduplication ===');
     const { deduplicateCandidates } = await import('../src/agents/sourcer/deduplication');
     const unique = await deduplicateCandidates(candidates, openMarkets);
     console.log(`${unique.length}/${candidates.length} candidates survived dedup`);

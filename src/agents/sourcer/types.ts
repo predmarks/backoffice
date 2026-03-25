@@ -27,6 +27,31 @@ export interface IngestionResult {
   dataPoints: DataPoint[];
 }
 
+export interface Topic {
+  id?: string;
+  name: string;
+  slug: string;
+  summary: string;
+  signalIndices: number[];  // used during extraction, not persisted
+  suggestedAngles: string[];
+  category: MarketCategory;
+  score: number;
+  status?: 'active' | 'stale' | 'used' | 'dismissed';
+  signalCount?: number;
+  lastSignalAt?: string;
+  lastGeneratedAt?: string;
+}
+
+export function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 100);
+}
+
 export interface GeneratedCandidate {
   title: string;
   description: string;

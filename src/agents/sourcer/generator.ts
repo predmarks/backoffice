@@ -1,13 +1,13 @@
 import { callClaude } from '@/lib/llm';
 import { HARD_RULES, SOFT_RULES } from '@/config/rules';
 import { db } from '@/db/client';
-import { marketEvents, markets } from '@/db/schema';
+import { marketEvents, markets, globalFeedback } from '@/db/schema';
 import { eq, desc, and, gte, isNotNull } from 'drizzle-orm';
-import type { SourceSignal, DataPoint, GeneratedCandidate } from './types';
+import type { DataPoint, GeneratedCandidate, Topic } from './types';
 
 const SYSTEM_PROMPT = `Sos un creador de mercados predictivos para Predmarks, una plataforma
-argentina de mercados de predicción. Tu trabajo es convertir señales de
-noticias y datos en mercados atractivos y operables.
+argentina de mercados de predicción. Recibís TEMAS ya analizados con ángulos
+sugeridos y tu trabajo es convertirlos en mercados formales y operables.
 
 IDIOMA: Todos los mercados deben estar en español argentino.
 
@@ -31,13 +31,10 @@ PATRONES DE TIMING POR CATEGORÍA:
 - Si no podés garantizar timing seguro, NO generes el mercado
 
 REGLAS DE CONTENIDO:
-- Enfoque Argentina: política, economía, deportes, entretenimiento, clima
-  (temas de "sociedad" van en Política)
 - Evitar mercados globales cubiertos por Polymarket/Kalshi
   (EXCEPCIÓN: eventos de altísima importancia como elecciones)
 - NUNCA inventar números. Si no tenés el dato actual, marcá como
   "requiere verificación" y dejá el campo vacío
-- Preferir mercados controversiales con potencial de oscilaciones
 - Ambos resultados (Sí y No) deben ser plausibles
 
 CONTINGENCIAS ESTÁNDAR (incluir las que apliquen):
@@ -49,14 +46,15 @@ CONTINGENCIAS ESTÁNDAR (incluir las que apliquen):
 - Deportes partidos: cancelación/suspensión/posterga a otro día → "No"
 - Clima: siempre referenciar timeanddate.com como fuente
 
-REGLAS DE VALIDACIÓN (tu output será verificado contra estas):
+REGLAS DE VALIDACIÓN:
 {rules}
 
-Generá exactamente {targetCount} mercados candidatos a partir de estas señales.
-Intentá cubrir la mayor variedad de categorías y temas posible.
-Salteá señales que claramente no dan buenos mercados, pero sé generoso:
-si una señal tiene potencial razonable, generá el mercado.
-Cada señal puede inspirar más de un mercado (ej: distintos ángulos o plazos).`;
+INSTRUCCIONES:
+- Cada tema viene con ángulos sugeridos. Usá esos ángulos como guía pero
+  podés mejorarlos, combinarlos o descartarlos si encontrás algo mejor.
+- Generá exactamente {targetCount} mercados eligiendo los mejores temas/ángulos.
+- Priorizá temas con score más alto.
+- NO generes más de 1 mercado por tema salvo que tenga ángulos muy distintos.`;
 
 const OUTPUT_SCHEMA = {
   type: 'object' as const,
@@ -131,6 +129,19 @@ async function loadTriageFeedback(): Promise<string> {
   return `\nDESCARTES RECIENTES DEL EDITOR (evitar patrones similares):\n${lines.join('\n')}\n`;
 }
 
+async function loadGlobalFeedback(): Promise<string> {
+  const entries = await db
+    .select({ text: globalFeedback.text })
+    .from(globalFeedback)
+    .orderBy(desc(globalFeedback.createdAt))
+    .limit(50);
+
+  if (entries.length === 0) return '';
+
+  const lines = entries.map((e) => `- ${e.text}`);
+  return `\nINSTRUCCIONES GLOBALES DEL EDITOR:\n${lines.join('\n')}\n`;
+}
+
 function formatDataPoints(dataPoints: DataPoint[]): string {
   if (dataPoints.length === 0) return 'No hay datos actuales disponibles.';
   return dataPoints
@@ -147,27 +158,27 @@ function formatRules(): string {
   return `Reglas estrictas (rechazo automático si falla):\n${hard}\n\nAdvertencias:\n${soft}`;
 }
 
-function formatSignals(signals: SourceSignal[]): string {
-  return signals
-    .map((s, i) => {
-      const parts = [`${i + 1}. [${s.source}] ${s.text}`];
-      if (s.summary) parts.push(`   ${s.summary}`);
-      if (s.url) parts.push(`   ${s.url}`);
-      return parts.join('\n');
+function formatTopics(topics: Topic[]): string {
+  return topics
+    .map((t, i) => {
+      const angles = t.suggestedAngles.map((a) => `   - ${a}`).join('\n');
+      return `${i + 1}. [${t.category}] ${t.name} (score: ${t.score}/10)\n   ${t.summary}\n   Ángulos sugeridos:\n${angles}`;
     })
     .join('\n\n');
 }
 
-const BATCH_SIZE = 50;
-
-async function generateBatch(
-  signals: SourceSignal[],
+export async function generateMarkets(
+  topics: Topic[],
   dataPoints: DataPoint[],
   openMarketTitles: string[],
-  batchIndex: number,
-  targetCount: number,
-  triageFeedback: string,
+  targetCount: number = 10,
 ): Promise<GeneratedCandidate[]> {
+  if (topics.length === 0) return [];
+
+  const [triageFeedback, globalFeedbackText] = await Promise.all([
+    loadTriageFeedback(),
+    loadGlobalFeedback(),
+  ]);
   const today = new Date().toISOString().split('T')[0];
 
   const system = SYSTEM_PROMPT
@@ -180,60 +191,20 @@ ${formatDataPoints(dataPoints)}
 HOY: ${today}
 AÑO ACTUAL: ${new Date().getFullYear()}
 IMPORTANTE: Todos los endTimestamp y expectedResolutionDate deben ser en el año ${new Date().getFullYear()}.
-${triageFeedback}
+${globalFeedbackText}${triageFeedback}
 MERCADOS ABIERTOS (no duplicar):
 ${openMarketTitles.length > 0 ? openMarketTitles.map((t) => `- ${t}`).join('\n') : 'Ninguno'}
 
-SEÑALES (lote ${batchIndex + 1}):
-${formatSignals(signals)}`;
+TEMAS EXTRAÍDOS (${topics.length} temas, ordenados por score):
+${formatTopics(topics)}`;
 
   const { result } = await callClaude<{ candidates: GeneratedCandidate[] }>({
     system,
     userMessage,
     outputSchema: OUTPUT_SCHEMA,
     outputToolName: 'generate_markets',
+    model: 'opus',
   });
 
   return result.candidates;
-}
-
-export async function generateMarkets(
-  signals: SourceSignal[],
-  dataPoints: DataPoint[],
-  openMarketTitles: string[],
-  targetCount: number = 10,
-): Promise<GeneratedCandidate[]> {
-  if (signals.length === 0) return [];
-
-  const triageFeedback = await loadTriageFeedback();
-
-  // Split signals into batches for parallel generation
-  const batches: SourceSignal[][] = [];
-  for (let i = 0; i < signals.length; i += BATCH_SIZE) {
-    batches.push(signals.slice(i, i + BATCH_SIZE));
-  }
-
-  console.log(`Generating candidates from ${batches.length} batch(es) of signals...`);
-
-  const results = await Promise.allSettled(
-    batches.map((batch, i) => generateBatch(batch, dataPoints, openMarketTitles, i, targetCount, triageFeedback)),
-  );
-
-  const allCandidates: GeneratedCandidate[] = [];
-  const errors: string[] = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      allCandidates.push(...result.value);
-    } else {
-      const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
-      console.error('Generation batch failed:', msg);
-      errors.push(msg);
-    }
-  }
-
-  if (allCandidates.length === 0 && errors.length > 0) {
-    throw new Error(`All generation batches failed: ${errors.join('; ')}`);
-  }
-
-  return allCandidates;
 }

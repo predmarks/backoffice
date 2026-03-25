@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { sourcingRuns } from '@/db/schema';
 import { desc, eq } from 'drizzle-orm';
-import { CANDIDATE_CAP } from '@/agents/sourcer';
 
 export async function GET(request: NextRequest) {
   const runId = request.nextUrl.searchParams.get('runId');
@@ -37,5 +36,5 @@ export async function GET(request: NextRequest) {
     .orderBy(desc(sourcingRuns.startedAt))
     .limit(10);
 
-  return NextResponse.json({ runs, candidateCap: CANDIDATE_CAP });
+  return NextResponse.json({ runs });
 }

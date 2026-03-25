@@ -3,7 +3,7 @@ import { ingestData } from './ingestion-data';
 import { ingestTwitter } from './ingestion-twitter';
 import { db } from '@/db/client';
 import { signals as signalsTable } from '@/db/schema';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, isNotNull } from 'drizzle-orm';
 import type { IngestionResult, DataPoint, SourceSignal } from './types';
 
 export async function ingestAllSources(): Promise<IngestionResult> {
@@ -40,6 +40,7 @@ export async function ingestAllSources(): Promise<IngestionResult> {
           })
           .onConflictDoUpdate({
             target: signalsTable.url,
+            targetWhere: isNotNull(signalsTable.url),
             set: { text: signal.text },
           })
           .returning({ id: signalsTable.id });
