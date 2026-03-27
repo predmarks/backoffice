@@ -2,7 +2,7 @@
 
 ## Context
 
-Predmarks is an Argentina-focused prediction market platform using LMSR as its automated market maker. Markets and resolution criteria are in **Spanish**. Binary markets only for now (`['Si', 'No']`), multiple-choice coming soon. The current approach — feeding social media posts into an LLM wrapper — produces low-quality output with hallucinated data, made-up resolution criteria, and stale numbers. This system replaces that entirely.
+Predmarks is an Argentina-focused prediction market platform using LMSR as its automated market maker. Markets and resolution criteria are in **Spanish**. Supports both binary (`['Si', 'No']`) and multi-outcome markets — the LLM decides the appropriate outcome type. The current approach — feeding social media posts into an LLM wrapper — produces low-quality output with hallucinated data, made-up resolution criteria, and stale numbers. This system replaces that entirely.
 
 ### Critical constraint: LMSR and market timing
 

@@ -97,7 +97,7 @@ export interface Resolution {
   evidence: string;
   evidenceUrls: string[];
   confidence: 'high' | 'medium' | 'low';
-  suggestedOutcome: 'Si' | 'No';
+  suggestedOutcome: string;
   flaggedAt: string;
   confirmedBy?: string;
   confirmedAt?: string;
@@ -113,7 +113,7 @@ export interface Market {
   contingencies: string;
   category: MarketCategory;
   tags: string[];
-  outcomes: ['Si', 'No'];
+  outcomes: string[];
   endTimestamp: number;
   expectedResolutionDate?: string | null;
   timingSafety: TimingSafety;
@@ -121,7 +121,7 @@ export interface Market {
   publishedAt?: Date | null;
   closedAt?: Date | null;
   resolvedAt?: Date | null;
-  outcome?: 'Si' | 'No' | null;
+  outcome?: string | null;
   sourceContext: SourceContext;
   review?: Review | null;
   iterations?: Iteration[] | null;
@@ -163,6 +163,6 @@ export interface DeployableMarket {
   name: string;
   description: string;
   category: string;
-  outcomes: ['Si', 'No'];
+  outcomes: string[];
   endTimestamp: number;
 }

@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
       contingencies: body.contingencies ?? '',
       category,
       tags: body.tags ?? [],
-      outcomes: ['Si', 'No'],
+      outcomes: Array.isArray(body.outcomes) && body.outcomes.length >= 2 ? body.outcomes : ['Si', 'No'],
       endTimestamp,
       expectedResolutionDate: body.expectedResolutionDate ?? null,
       timingSafety: body.timingSafety ?? 'safe',

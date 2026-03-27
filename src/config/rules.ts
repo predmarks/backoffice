@@ -24,11 +24,11 @@ export const HARD_RULES: Rule[] = [
   {
     id: 'H3',
     type: 'hard',
-    description: 'Both Si and No must be plausible outcomes',
-    check: `Evaluate whether both outcomes are genuinely possible. Flag if one
-      outcome is >95% likely based on current data. CRITICAL: verify any
-      numbers mentioned against current real-world data — do NOT trust
-      the candidate's numbers at face value.`,
+    description: 'All listed outcomes must be plausible',
+    check: `Evaluate whether all outcomes are genuinely possible. Flag if any
+      outcome is >95% likely or <1% likely based on current data. CRITICAL:
+      verify any numbers mentioned against current real-world data — do NOT
+      trust the candidate's numbers at face value.`,
   },
   {
     id: 'H4',
@@ -45,16 +45,16 @@ export const HARD_RULES: Rule[] = [
   {
     id: 'H6',
     type: 'hard',
-    description: 'Resolution must be binary and unambiguous',
-    check: `Verify criteria define a clear binary boundary. Flag if there are
-      scenarios where the outcome could be argued either way and no
-      contingency clause covers them.`,
+    description: 'Resolution must be unambiguous — exactly one outcome must match',
+    check: `Verify criteria clearly map to exactly one outcome from the listed
+      options. Flag if there are scenarios where multiple outcomes could match
+      or no outcome matches and no contingency clause covers them.`,
   },
   {
     id: 'H7',
     type: 'hard',
-    description: 'Title must be a clear yes/no question in Spanish',
-    check: 'Verify the title is a well-formed Spanish question answerable with Sí or No.',
+    description: 'Title must be a clear question in Spanish appropriate for the outcome type',
+    check: 'Verify the title is a well-formed Spanish question. Binary markets should be yes/no questions. Multi-outcome markets should clearly frame what is being predicted.',
   },
   {
     id: 'H8',
@@ -72,6 +72,24 @@ export const HARD_RULES: Rule[] = [
       (economic indicators, reserves, inflation, prices, poll numbers,
       statistics). Flag any discrepancy. This is critical — our previous
       system hallucinated numbers constantly.`,
+  },
+  {
+    id: 'H11',
+    type: 'hard',
+    description: 'Multi-outcome markets must have 3-8 outcomes',
+    check: `For non-binary markets: verify there are between 3 and 8 outcomes.
+      Less than 3 means it should be binary (Si/No). More than 8 means
+      low-probability options should be grouped into "Otro".
+      Binary markets (exactly ["Si", "No"]) are exempt from this rule.`,
+  },
+  {
+    id: 'H12',
+    type: 'hard',
+    description: 'Multi-outcome markets must include "Otro" unless outcomes are mathematically exhaustive',
+    check: `For non-binary markets: verify "Otro" is included as an outcome UNLESS
+      the outcomes are mathematically exhaustive (e.g., contiguous numeric ranges
+      that cover all possibilities, or a complete set of known options).
+      Binary markets are exempt from this rule.`,
   },
 ];
 
@@ -124,6 +142,15 @@ export const SOFT_RULES: Rule[] = [
       already several open markets on similar indicators or themes. For categories
       where events are independent (sports, entertainment), multiple concurrent
       markets are fine and should NOT be penalized.`,
+  },
+  {
+    id: 'S8',
+    type: 'soft',
+    description: 'At least 2 outcomes should have >10% probability; if one dominates >85%, suggest reformulating',
+    check: `For multi-outcome markets, estimate rough probabilities. Flag if fewer
+      than 2 outcomes have >10% probability, or if one outcome dominates with >85%.
+      Suggest reformulating (e.g., grouping unlikely options or reframing the question).
+      Binary markets are exempt from this rule.`,
   },
 ];
 

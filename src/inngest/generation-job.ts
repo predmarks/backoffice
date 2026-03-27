@@ -99,6 +99,7 @@ export const generationJob = inngest.createFunction(
           .values({
             title: candidate.title,
             description: candidate.description,
+            outcomes: candidate.outcomes ?? ['Si', 'No'],
             resolutionCriteria: candidate.resolutionCriteria,
             resolutionSource: candidate.resolutionSource,
             contingencies: candidate.contingencies,

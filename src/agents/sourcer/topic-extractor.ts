@@ -45,7 +45,7 @@ Score = promedio de los 4.
 
 REGLAS:
 - Enfoque Argentina (política, economía, deportes, entretenimiento, clima)
-- Los ángulos deben ser preguntas sí/no específicas, no vagas
+- Los ángulos deben ser preguntas específicas para mercados predictivos (binarios sí/no o multi-opción), no vagas
 - Cada ángulo debe tener una fecha de resolución implícita
 - Evitar temas puramente informativos sin ángulo predictivo
 - Preferir temas donde hay TENSIÓN (dos posturas posibles)
@@ -88,7 +88,7 @@ const OUTPUT_SCHEMA = {
           suggestedAngles: {
             type: 'array' as const,
             items: { type: 'string' as const },
-            description: '1-3 preguntas sí/no específicas para mercados predictivos',
+            description: '1-3 preguntas específicas para mercados predictivos (binarios o multi-opción)',
           },
           category: {
             type: 'string' as const,

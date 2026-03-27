@@ -55,6 +55,7 @@ export function slugify(name: string): string {
 export interface GeneratedCandidate {
   title: string;
   description: string;
+  outcomes?: string[];
   resolutionCriteria: string;
   resolutionSource: string;
   contingencies: string;

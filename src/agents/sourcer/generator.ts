@@ -35,11 +35,22 @@ REGLAS DE CONTENIDO:
   (EXCEPCIÓN: eventos de altísima importancia como elecciones)
 - NUNCA inventar números. Si no tenés el dato actual, marcá como
   "requiere verificación" y dejá el campo vacío
-- Ambos resultados (Sí y No) deben ser plausibles
+- Todos los resultados deben ser plausibles
+
+TIPO DE MERCADO:
+- Decidí si el mercado es binario (Sí/No) o multi-opción
+- Para preguntas con más de 2 respuestas naturales (ej: quién gana una elección,
+  en qué rango cae un indicador), usá multi-opción con outcomes explícitos
+- Los mercados binarios usan outcomes: ["Si", "No"]
+- Multi-opción: entre 3 y 8 outcomes. Si hay más de 8, agrupá en "Otro"
+- SIEMPRE incluí "Otro" salvo que los outcomes sean matemáticamente exhaustivos
+  (ej: rangos numéricos contiguos que cubren todas las posibilidades)
+- Al menos 2 outcomes deben tener >10% de probabilidad. Si uno domina >85%,
+  reformulá la pregunta o usá formato binario
 
 CONTINGENCIAS ESTÁNDAR (incluir las que apliquen):
 - Si la fuente no publica: usar fuente alternativa o última disponible
-- Si el evento se cancela: resolver como "No"
+- Si el evento se cancela: resolver según las opciones del mercado (en binarios: "No")
 - Si hay revisión de datos: usar primera publicación
 - Deportes partidos: resultado en tiempo reglamentario + cláusula de
   reprogramación ("si se reprograma a fecha anterior, cierre anticipado")
@@ -48,6 +59,12 @@ CONTINGENCIAS ESTÁNDAR (incluir las que apliquen):
 
 REGLAS DE VALIDACIÓN:
 {rules}
+
+FORMATO DE DESCRIPCIÓN:
+- La descripción DEBE estar en Markdown
+- Usar **negritas** para datos clave, [links](url) a fuentes, listas para puntos relevantes
+- Incluir contexto, datos actuales, y por qué el mercado es interesante
+- Estructura sugerida: contexto general → datos recientes → qué está en juego
 
 INSTRUCCIONES:
 - Cada tema viene con ángulos sugeridos. Usá esos ángulos como guía pero
@@ -64,9 +81,10 @@ const OUTPUT_SCHEMA = {
       items: {
         type: 'object' as const,
         properties: {
-          title: { type: 'string' as const, description: 'Pregunta sí/no en español argentino, con signos de interrogación' },
-          description: { type: 'string' as const, description: 'Contexto breve del mercado' },
-          resolutionCriteria: { type: 'string' as const, description: 'Criterios de resolución claros y binarios' },
+          title: { type: 'string' as const, description: 'Pregunta clara en español argentino, con signos de interrogación' },
+          description: { type: 'string' as const, description: 'Contexto del mercado en formato Markdown. Usar secciones, listas, links y negritas para estructurar la información.' },
+          outcomes: { type: 'array' as const, items: { type: 'string' as const }, description: 'Opciones del mercado. Binarios: ["Si", "No"]. Multi-opción: listar todas las opciones.' },
+          resolutionCriteria: { type: 'string' as const, description: 'Criterios de resolución claros e inequívocos' },
           resolutionSource: { type: 'string' as const, description: 'Nombre y URL de la fuente de resolución' },
           contingencies: { type: 'string' as const, description: 'Cláusulas de contingencia aplicables' },
           category: {
@@ -84,7 +102,7 @@ const OUTPUT_SCHEMA = {
           },
         },
         required: [
-          'title', 'description', 'resolutionCriteria', 'resolutionSource',
+          'title', 'description', 'outcomes', 'resolutionCriteria', 'resolutionSource',
           'contingencies', 'category', 'tags', 'endTimestamp',
           'expectedResolutionDate', 'timingAnalysis',
         ] as const,

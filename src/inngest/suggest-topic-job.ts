@@ -23,7 +23,7 @@ const RESEARCH_SCHEMA = {
     suggestedAngles: {
       type: 'array' as const,
       items: { type: 'string' as const },
-      description: '3-5 preguntas sí/no específicas para mercados predictivos',
+      description: '3-5 preguntas específicas para mercados predictivos (binarios o multi-opción)',
     },
     score: { type: 'number' as const, description: 'Potencial de mercado 0-10' },
     sources: {
@@ -70,7 +70,7 @@ Devolvé un análisis estructurado del tema.
 IMPORTANTE:
 - El nombre debe ser corto y descriptivo (máximo 8 palabras)
 - El resumen debe tener 3-5 oraciones con contexto actual verificado
-- Los ángulos sugeridos deben ser preguntas sí/no concretas y resolubles
+- Los ángulos sugeridos deben ser preguntas concretas y resolubles (binarias sí/no o multi-opción)
 - El score refleja el potencial como mercado predictivo (interés público, resolución clara, timing)
 - Incluí todas las fuentes que consultaste (artículos, datos, páginas) con URL, título, resumen breve y fecha si la tenés
 - Todo en español argentino`;

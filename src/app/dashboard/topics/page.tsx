@@ -15,6 +15,7 @@ interface TopicData {
   signalCount: number;
   lastSignalAt: string | null;
   lastGeneratedAt: string | null;
+  conversationCount?: number;
 }
 
 function formatDate(dateStr: string): string {
@@ -421,7 +422,19 @@ export default function TopicsPage() {
                   </Link>
                 )}
                 {!isResearching && (
-                  <span className="text-xs text-gray-400 shrink-0">{t.category}</span>
+                  <>
+                    <span className="text-xs text-gray-400 shrink-0">{t.category}</span>
+                    <span className={`text-[10px] shrink-0 px-1 py-0.5 rounded ${
+                      t.signalCount >= 50 ? 'bg-purple-100 text-purple-700' :
+                      t.signalCount >= 20 ? 'bg-green-100 text-green-700' :
+                      t.signalCount >= 10 ? 'bg-blue-100 text-blue-700' :
+                      t.signalCount >= 5 ? 'bg-yellow-100 text-yellow-700' :
+                      'text-gray-300'
+                    }`}>{t.signalCount} señales</span>
+                    {(t.conversationCount ?? 0) > 0 && (
+                      <span className="text-[10px] text-gray-300 shrink-0">{t.conversationCount} chat{t.conversationCount !== 1 ? 's' : ''}</span>
+                    )}
+                  </>
                 )}
                 <div className="ml-auto flex items-center gap-2 shrink-0">
                   {!isResearching && (
@@ -479,9 +492,12 @@ export default function TopicsPage() {
                   )}
 
                   <div className="flex items-center gap-3 text-xs text-gray-400">
-                    <span>{t.signalCount} senales</span>
+                    <span>{t.signalCount} señales</span>
+                    {(t.conversationCount ?? 0) > 0 && (
+                      <span>{t.conversationCount} chat{t.conversationCount !== 1 ? 's' : ''}</span>
+                    )}
                     {t.lastSignalAt && (
-                      <span>ultima: {formatDate(t.lastSignalAt)}</span>
+                      <span>última: {formatDate(t.lastSignalAt)}</span>
                     )}
                   </div>
                 </div>

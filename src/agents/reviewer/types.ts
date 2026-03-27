@@ -14,7 +14,7 @@ export interface MarketRecord {
   contingencies: string;
   category: string;
   tags: string[];
-  outcomes: ['Si', 'No'];
+  outcomes: string[];
   endTimestamp: number;
   expectedResolutionDate: string | null;
   timingSafety: string;

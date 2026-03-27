@@ -25,9 +25,10 @@ export async function POST(
   const body = await request.json();
   const { outcome, confirmedBy } = body;
 
-  if (outcome !== 'Si' && outcome !== 'No') {
+  const validOutcomes = (market.outcomes as string[]) ?? ['Si', 'No'];
+  if (!validOutcomes.includes(outcome)) {
     return NextResponse.json(
-      { error: 'Outcome must be "Si" or "No"' },
+      { error: `Outcome must be one of: ${validOutcomes.join(', ')}` },
       { status: 400 },
     );
   }

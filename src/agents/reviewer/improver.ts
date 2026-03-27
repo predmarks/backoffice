@@ -100,8 +100,8 @@ PRIORIDADES:
    NO pueda resolverse mientras está abierto. Ajustá endTimestamp si es necesario.
 2. CRITERIOS: Hacé la resolución hermética con fuente pública, hora argentina, casos borde.
 3. CONTINGENCIAS: Incluí las cláusulas estándar que apliquen.
-4. TÍTULO: Hacelo claro, atractivo, y como pregunta sí/no en español argentino.
-5. DESCRIPCIÓN: Contexto breve y relevante.
+4. TÍTULO: Hacelo claro, atractivo, y como pregunta en español argentino. Para binarios: pregunta sí/no. Para multi-opción: pregunta clara sobre lo que se predice.
+5. DESCRIPCIÓN: Contexto en Markdown (negritas, links, listas). Incluir datos actuales y por qué importa.
 
 Cláusulas de contingencia estándar disponibles:
 ${formatContingencyTemplates()}

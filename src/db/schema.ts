@@ -26,7 +26,7 @@ export const markets = pgTable(
     contingencies: text('contingencies').notNull().default(''),
     category: varchar('category', { length: 30 }).notNull(),
     tags: jsonb('tags').notNull().default([]).$type<string[]>(),
-    outcomes: jsonb('outcomes').notNull().default(['Si', 'No']).$type<['Si', 'No']>(),
+    outcomes: jsonb('outcomes').notNull().default(['Si', 'No']).$type<string[]>(),
     endTimestamp: integer('end_timestamp').notNull(),
     expectedResolutionDate: varchar('expected_resolution_date', { length: 10 }),
     timingSafety: varchar('timing_safety', { length: 10 }).notNull().default('safe'),
@@ -137,6 +137,21 @@ export const topicSignals = pgTable(
     index('topic_signals_topic_idx').on(table.topicId),
   ],
 );
+
+export const topicConversations = pgTable(
+  'topic_conversations',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    topicId: uuid('topic_id').notNull().references(() => topics.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    messages: jsonb('messages').notNull().default([]).$type<{ role: 'user' | 'assistant'; content: string }[]>(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => [
+    index('topic_conversations_topic_idx').on(table.topicId),
+  ],
+).enableRLS();
 
 export const globalFeedback = pgTable('global_feedback', {
   id: uuid('id').defaultRandom().primaryKey(),

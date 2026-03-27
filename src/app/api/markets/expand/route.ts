@@ -18,8 +18,8 @@ function getMissingFields(partial: Record<string, unknown>): MarketField[] {
 
 function buildOutputSchema(missing: MarketField[]) {
   const fieldSchemas: Record<string, Record<string, unknown>> = {
-    title: { type: 'string', description: 'Pregunta cerrada sí/no' },
-    description: { type: 'string', description: 'Contexto del mercado' },
+    title: { type: 'string', description: 'Pregunta clara en español argentino' },
+    description: { type: 'string', description: 'Contexto del mercado en Markdown (negritas, links, listas)' },
     resolutionCriteria: { type: 'string', description: 'Criterios inequívocos de resolución' },
     resolutionSource: { type: 'string', description: 'Fuente oficial para resolver' },
     category: { type: 'string', enum: [...MARKET_CATEGORIES] },
@@ -62,14 +62,17 @@ export async function POST(request: NextRequest) {
     .join('\n');
 
   const system = `Sos un experto en mercados de predicción para Argentina.
-El usuario ya definió parte de un mercado de predicción binario (Sí/No).
+El usuario ya definió parte de un mercado de predicción.
 Tu trabajo es completar SOLO los campos faltantes, basándote en la información proporcionada.
 
 Campos ya definidos por el usuario (NO modificar):
 ${provided}
 
 Reglas para los campos que generes:
-- El título DEBE ser una pregunta cerrada que se responda con Sí o No
+- El título DEBE ser una pregunta clara en español argentino
+- Para mercados binarios: pregunta sí/no con outcomes ["Si", "No"]
+- Para mercados multi-opción: pregunta clara con outcomes listando todas las opciones
+- Si el mercado tiene más de 2 respuestas naturales, usar multi-opción. Incluir "Otro" si las opciones no son exhaustivas
 - La descripción da contexto sobre el evento
 - Los criterios de resolución deben ser inequívocos y verificables
 - La fuente de resolución debe ser una autoridad o URL verificable
@@ -81,8 +84,8 @@ Reglas para los campos que generes:
 
 REGLAS CRÍTICAS para contingencias:
 - NUNCA mencionar reembolsos, devoluciones, ni declarar mercados como "inválidos"
-- Los mercados SIEMPRE se resuelven como "Sí" o "No", sin excepciones
-- Si un evento se cancela, pospone indefinidamente, o no ocurre → se resuelve como "No"
+- Los mercados SIEMPRE se resuelven eligiendo una de las opciones listadas, sin excepciones
+- Si un evento se cancela, pospone indefinidamente, o no ocurre → resolver según las opciones (en binarios: "No")
 - Si la fuente no publica datos, usar el último dato disponible o fuente alternativa
 - Predmarks se reserva el derecho de modificar fechas de cierre ante cambios en la programación`;
 

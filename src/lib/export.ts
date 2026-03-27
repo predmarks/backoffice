@@ -15,7 +15,7 @@ export function toDeployableMarket(market: Market): DeployableMarket {
     name: market.title,
     description: fullDescription,
     category: market.category,
-    outcomes: ['Si', 'No'],
+    outcomes: market.outcomes,
     endTimestamp: market.endTimestamp,
   };
 }

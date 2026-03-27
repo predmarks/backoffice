@@ -12,6 +12,7 @@ import { TimingSafetyIndicator } from '../../_components/TimingSafetyIndicator';
 import { MarketActions } from './_components/MarketActions';
 import { HumanFeedback } from './_components/HumanFeedback';
 import { CopyJsonButton } from './_components/CopyJsonButton';
+import { Markdown } from '../../../_components/Markdown';
 
 function formatTimestamp(ts: number): string {
   return new Intl.DateTimeFormat('es-AR', {
@@ -103,7 +104,7 @@ export default async function MarketDetailPage({ params }: Props) {
           </Section>
 
           <Section title="Descripción">
-            <p className="text-gray-700">{market.description}</p>
+            <Markdown className="text-gray-700">{market.description}</Markdown>
           </Section>
 
           <Section title="Criterios de resolución">
@@ -144,6 +145,30 @@ export default async function MarketDetailPage({ params }: Props) {
               </div>
             </Section>
           )}
+
+          {(() => {
+            const outcomes = (market.outcomes as string[]) ?? ['Si', 'No'];
+            const isBinary = outcomes.length === 2 && outcomes[0] === 'Si' && outcomes[1] === 'No';
+            if (isBinary) return null;
+            return (
+              <Section title="Opciones">
+                <div className="flex gap-1.5 flex-wrap">
+                  {outcomes.map((o: string) => (
+                    <span
+                      key={o}
+                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                        market.outcome === o
+                          ? 'bg-green-100 text-green-700 ring-1 ring-green-400'
+                          : 'bg-gray-100 text-gray-600'
+                      }`}
+                    >
+                      {o}
+                    </span>
+                  ))}
+                </div>
+              </Section>
+            );
+          })()}
 
           {market.outcome && (
             <Section title="Resultado">

@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -99,10 +100,10 @@ export function HumanFeedback({ marketId, feedback }: HumanFeedbackProps) {
                   className={`text-sm rounded px-3 py-2 ${
                     msg.role === 'user'
                       ? 'bg-blue-50 text-blue-900 ml-4'
-                      : 'bg-gray-50 text-gray-700 mr-4'
+                      : 'bg-gray-50 text-gray-700 mr-4 prose prose-sm max-w-none'
                   }`}
                 >
-                  {msg.content}
+                  {msg.role === 'assistant' ? <ReactMarkdown>{msg.content}</ReactMarkdown> : msg.content}
                 </div>
               ))}
             </div>
@@ -132,10 +133,10 @@ export function HumanFeedback({ marketId, feedback }: HumanFeedbackProps) {
             className={`text-sm rounded px-3 py-2 ${
               msg.role === 'user'
                 ? 'bg-blue-50 text-blue-900 ml-4'
-                : 'bg-gray-50 text-gray-700 mr-4'
+                : 'bg-gray-50 text-gray-700 mr-4 prose prose-sm max-w-none'
             }`}
           >
-            {msg.content}
+            {msg.role === 'assistant' ? <ReactMarkdown>{msg.content}</ReactMarkdown> : msg.content}
           </div>
         ))}
 
