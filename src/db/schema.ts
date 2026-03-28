@@ -40,10 +40,15 @@ export const markets = pgTable(
     iterations: jsonb('iterations').$type<Iteration[]>(),
     resolution: jsonb('resolution').$type<Resolution>(),
     isArchived: boolean('is_archived').notNull().default(false),
+    onchainId: varchar('onchain_id', { length: 20 }),
+    onchainAddress: varchar('onchain_address', { length: 42 }),
+    volume: varchar('volume', { length: 40 }),
+    participants: integer('participants'),
   },
   (table) => [
     index('markets_status_idx').on(table.status),
     index('markets_status_created_idx').on(table.status, table.createdAt),
+    uniqueIndex('markets_onchain_id_idx').on(table.onchainId),
   ],
 ).enableRLS();
 
@@ -206,6 +211,13 @@ export const llmUsage = pgTable(
 export const globalFeedback = pgTable('global_feedback', {
   id: uuid('id').defaultRandom().primaryKey(),
   text: text('text').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}).enableRLS();
+
+export const resolutionFeedback = pgTable('resolution_feedback', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  text: text('text').notNull(),
+  marketId: uuid('market_id').references(() => markets.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }).enableRLS();
 

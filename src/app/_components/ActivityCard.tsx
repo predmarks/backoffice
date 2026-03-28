@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { CitedText } from './CitedText';
 
 export interface ActivityEntry {
   id: string;
@@ -177,7 +178,7 @@ function ContentView({ action, detail }: { action: string; detail: Record<string
       <div className="space-y-1">
         {outcome && <p className="text-sm text-gray-700">Resultado: <strong>{outcome}</strong></p>}
         {confidence && <p className="text-xs text-gray-500">Confianza: {confidence}</p>}
-        {typeof detail.evidence === 'string' && <p className="text-xs text-gray-500">{detail.evidence}</p>}
+        {typeof detail.evidence === 'string' && <p className="text-xs text-gray-500"><CitedText>{detail.evidence}</CitedText></p>}
       </div>
     );
   }
@@ -188,7 +189,7 @@ function ContentView({ action, detail }: { action: string; detail: Record<string
     return (
       <div className="space-y-1">
         {suggestedOutcome && <p className="text-sm text-gray-700">Se descartó: <strong>{suggestedOutcome}</strong> ({confidence ?? '?'})</p>}
-        {typeof detail.evidence === 'string' && <p className="text-xs text-gray-500">{detail.evidence}</p>}
+        {typeof detail.evidence === 'string' && <p className="text-xs text-gray-500"><CitedText>{detail.evidence}</CitedText></p>}
       </div>
     );
   }

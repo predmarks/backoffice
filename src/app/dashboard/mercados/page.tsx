@@ -11,24 +11,73 @@ interface MarketEntry {
   score: number | null;
   createdAt: string;
   stale: boolean;
+  volume: string | null;
+  participants: number | null;
+  endTimestamp: number;
+  resolution: { suggestedOutcome?: string; confidence?: string } | null;
+}
+
+function formatTimeInfo(status: string, endTimestamp: number): string | null {
+  const now = Date.now();
+  const endMs = endTimestamp * 1000;
+  const diff = endMs - now;
+
+  if (status === 'open') {
+    if (diff <= 0) return 'Cerrado';
+    const days = Math.floor(diff / 86_400_000);
+    const hours = Math.floor((diff % 86_400_000) / 3_600_000);
+    if (days > 0) return `${days}d ${hours}h`;
+    return `${hours}h`;
+  }
+
+  if (status === 'in_resolution') {
+    const elapsed = now - endMs;
+    if (elapsed <= 0) return null;
+    const days = Math.floor(elapsed / 86_400_000);
+    const hours = Math.floor((elapsed % 86_400_000) / 3_600_000);
+    if (days > 0) return `hace ${days}d`;
+    return `hace ${hours}h`;
+  }
+
+  return null;
+}
+
+function formatVolume(vol: string): string {
+  const n = parseFloat(vol) / 1e6;
+  if (isNaN(n) || n === 0) return '0';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toFixed(0);
 }
 
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
-  candidate: { label: 'Candidato', className: 'bg-gray-100 text-gray-600' },
+  candidate: { label: 'Candidato', className: 'bg-blue-100 text-blue-700' },
   processing: { label: 'Revisando', className: 'bg-blue-100 text-blue-700' },
-  open: { label: 'Abierto', className: 'bg-green-100 text-green-700' },
-  resolved: { label: 'Resuelto', className: 'bg-gray-100 text-gray-500' },
-  rejected: { label: 'Rechazado', className: 'bg-red-100 text-red-600' },
+  open: { label: 'Abierto', className: 'bg-indigo-100 text-indigo-700' },
+  in_resolution: { label: 'En resolución', className: 'bg-yellow-100 text-yellow-700' },
+  closed: { label: 'Resuelto', className: 'bg-purple-100 text-purple-700' },
+  rejected: { label: 'Rechazado', className: 'bg-gray-100 text-gray-500' },
   cancelled: { label: 'Cancelado', className: 'bg-orange-100 text-orange-600' },
 };
 
-const ARCHIVED_STATUSES = ['resolved', 'rejected', 'cancelled'];
+const ARCHIVED_STATUSES = ['closed', 'rejected', 'cancelled'];
+
+const STATUS_ORDER: Record<string, number> = {
+  in_resolution: 0,
+  open: 1,
+  processing: 2,
+  candidate: 3,
+  closed: 4,
+  rejected: 5,
+  cancelled: 6,
+};
 
 const FILTERS = [
   { key: 'all', label: 'Activos', statuses: null },
+  { key: 'in_resolution', label: 'En resolución', statuses: ['in_resolution'] },
+  { key: 'open', label: 'Abiertos', statuses: ['open'] },
   { key: 'candidate', label: 'Candidatos', statuses: ['candidate'] },
   { key: 'processing', label: 'En revisión', statuses: ['processing'] },
-  { key: 'open', label: 'Abiertos', statuses: ['open'] },
   { key: 'archived', label: 'Archivados', statuses: ARCHIVED_STATUSES },
 ];
 
@@ -51,7 +100,8 @@ export default function MercadosPage() {
   const [markets, setMarkets] = useState<MarketEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<'score' | 'date'>('score');
+  const [sortBy, setSortBy] = useState<'status' | 'score' | 'date' | 'volume' | 'participants'>('status');
+  const [sortAsc, setSortAsc] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
@@ -90,10 +140,18 @@ export default function MercadosPage() {
     ? markets.filter((m) => activeFilter.statuses!.includes(m.status))
     : markets.filter((m) => !ARCHIVED_STATUSES.includes(m.status));
 
-  // Sort
+  // Sort — selected sort takes precedence; 'status' groups by status priority
+  const dir = sortAsc ? 1 : -1;
   const filtered = [...baseFiltered].sort((a, b) => {
-    if (sortBy === 'score') return (b.score ?? 0) - (a.score ?? 0);
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    if (sortBy === 'status') {
+      const statusDiff = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
+      if (statusDiff !== 0) return statusDiff * dir;
+      return ((b.score ?? 0) - (a.score ?? 0)) * dir;
+    }
+    if (sortBy === 'score') return ((b.score ?? 0) - (a.score ?? 0)) * dir;
+    if (sortBy === 'volume') return ((parseFloat(b.volume ?? '0') - parseFloat(a.volume ?? '0'))) * dir;
+    if (sortBy === 'participants') return ((b.participants ?? 0) - (a.participants ?? 0)) * dir;
+    return (new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) * dir;
   });
 
   // Selection — all non-archived markets are selectable
@@ -129,7 +187,7 @@ export default function MercadosPage() {
   }
 
   // Rejectable statuses
-  const selectedRejectable = markets.filter((m) => selectedIds.has(m.id) && ['candidate', 'open'].includes(m.status));
+  const selectedRejectable = markets.filter((m) => selectedIds.has(m.id) && m.status === 'candidate');
 
   async function handleBulkReject() {
     if (selectedRejectable.length === 0) return;
@@ -191,17 +249,20 @@ export default function MercadosPage() {
       {markets.length > 0 && (
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400">Ordenar:</span>
-          {([['score', 'Score'], ['date', 'Recientes']] as const).map(([key, label]) => (
+          {([['status', 'Estado'], ['score', 'Score'], ['date', 'Recientes'], ['volume', 'Volumen'], ['participants', 'Participantes']] as const).map(([key, label]) => (
             <button
               key={key}
-              onClick={() => setSortBy(key)}
+              onClick={() => {
+                if (sortBy === key) setSortAsc(!sortAsc);
+                else { setSortBy(key); setSortAsc(key === 'status' || key === 'volume' || key === 'participants'); }
+              }}
               className={`px-2 py-0.5 text-xs rounded border transition-colors cursor-pointer ${
                 sortBy === key
                   ? 'bg-gray-800 text-white border-gray-800'
                   : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
               }`}
             >
-              {label}
+              {label} {sortBy === key ? (sortAsc ? '\u2191' : '\u2193') : ''}
             </button>
           ))}
         </div>
@@ -235,17 +296,19 @@ export default function MercadosPage() {
         {filtered.map((m) => {
           const badge = STATUS_BADGE[m.status] ?? STATUS_BADGE.candidate;
           const isArchived = ARCHIVED_STATUSES.includes(m.status);
-          const isRejectable = ['candidate', 'open'].includes(m.status);
+          const isRejectable = m.status === 'candidate';
           const isSelected = selectedIds.has(m.id);
 
           return (
             <div
               key={m.id}
               onClick={() => router.push(`/dashboard/markets/${m.id}`)}
-              className={`bg-white border rounded-lg cursor-pointer hover:border-gray-400 transition-colors ${
+              className={`border rounded-lg cursor-pointer hover:border-gray-400 transition-colors ${
                 isSelected
-                  ? 'border-blue-400 ring-1 ring-blue-200'
-                  : 'border-gray-200'
+                  ? 'border-blue-400 ring-1 ring-blue-200 bg-white'
+                  : m.status === 'in_resolution'
+                  ? 'border-amber-200 bg-amber-50/50'
+                  : 'border-gray-200 bg-white'
               }`}
             >
               <div className="flex items-center gap-2 px-3 py-2">
@@ -267,10 +330,34 @@ export default function MercadosPage() {
                 <span className="text-sm font-medium text-gray-800 truncate flex-1 min-w-0">
                   {m.title}
                 </span>
+                {m.resolution?.suggestedOutcome && (
+                  <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                    m.resolution.confidence === 'high' ? 'bg-green-100 text-green-700' :
+                    m.resolution.confidence === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                    'bg-gray-100 text-gray-500'
+                  }`}>
+                    → {m.resolution.suggestedOutcome}
+                  </span>
+                )}
                 <span className="text-xs text-gray-400 shrink-0">{m.category}</span>
+                {m.volume && (
+                  <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-50 text-emerald-600">${formatVolume(m.volume)}</span>
+                )}
+                {m.participants != null && m.participants > 0 && (
+                  <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-50 text-blue-600">{m.participants} participantes</span>
+                )}
                 {m.stale && (
                   <span className="text-[10px] text-orange-500 shrink-0">stale</span>
                 )}
+                {(() => {
+                  const timeInfo = formatTimeInfo(m.status, m.endTimestamp);
+                  if (!timeInfo) return null;
+                  return (
+                    <span className={`shrink-0 text-[10px] ${m.status === 'in_resolution' ? 'text-amber-500' : 'text-gray-400'}`}>
+                      {timeInfo}
+                    </span>
+                  );
+                })()}
                 <div className="ml-auto flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                   {isRejectable && (
                     <button

@@ -91,7 +91,7 @@ export function MarketActions({ marketId, status, iterations, isArchived }: Mark
           />
         )}
 
-        {(status === 'candidate' || status === 'open') && (
+        {status === 'candidate' && (
           <ActionButton
             label="Rechazar"
             loading={loading === 'reject'}
@@ -102,31 +102,6 @@ export function MarketActions({ marketId, status, iterations, isArchived }: Mark
             }
             variant="danger"
           />
-        )}
-
-        {(status === 'closed' || status === 'open') && (
-          <>
-            <ActionButton
-              label="Resolver Sí"
-              loading={loading === 'resolve-si'}
-              onClick={() =>
-                handleAction('resolve', {
-                  body: JSON.stringify({ outcome: 'Si' }),
-                })
-              }
-              variant="primary"
-            />
-            <ActionButton
-              label="Resolver No"
-              loading={loading === 'resolve-no'}
-              onClick={() =>
-                handleAction('resolve', {
-                  body: JSON.stringify({ outcome: 'No' }),
-                })
-              }
-              variant="secondary"
-            />
-          </>
         )}
 
         {(ARCHIVABLE_STATUSES as readonly string[]).includes(status) && !isArchived && (

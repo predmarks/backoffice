@@ -40,6 +40,7 @@ export default function SignalsPage() {
   const [loadingSignals, setLoadingSignals] = useState(true);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const prevHasRunning = useRef(hasRunning);
 
   const fetchSignals = useCallback(async () => {
@@ -80,9 +81,15 @@ export default function SignalsPage() {
     return acc;
   }, {});
 
+  const typeCounts = signals.reduce<Record<string, number>>((acc, s) => {
+    acc[s.type] = (acc[s.type] ?? 0) + 1;
+    return acc;
+  }, {});
+
   const filteredSignals = signals.filter((s) => {
     if (sourceFilter && s.source !== sourceFilter) return false;
     if (categoryFilter && s.category !== categoryFilter) return false;
+    if (typeFilter && s.type !== typeFilter) return false;
     return true;
   });
 
@@ -124,6 +131,39 @@ export default function SignalsPage() {
               {source} ({count})
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Type filters */}
+      {signals.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setTypeFilter(null)}
+            className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
+              typeFilter === null
+                ? 'bg-gray-800 text-white border-gray-800'
+                : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+            }`}
+          >
+            Todos tipos ({signals.length})
+          </button>
+          {Object.entries(TYPE_BADGE).map(([type, badge]) => {
+            const count = typeCounts[type] ?? 0;
+            if (count === 0) return null;
+            return (
+              <button
+                key={type}
+                onClick={() => setTypeFilter(typeFilter === type ? null : type)}
+                className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
+                  typeFilter === type
+                    ? 'bg-gray-800 text-white border-gray-800'
+                    : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+                }`}
+              >
+                {badge.label} ({count})
+              </button>
+            );
+          })}
         </div>
       )}
 

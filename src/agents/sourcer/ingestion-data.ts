@@ -1,4 +1,4 @@
-import { BCRA_VARIABLES, BCRA_API_BASE, AMBITO_DOLAR_BLUE_URL } from '@/config/sources';
+import { BCRA_VARIABLES, BCRA_API_BASE, AMBITO_DOLAR_BLUE_URL, AMBITO_RIESGO_PAIS_URL } from '@/config/sources';
 import type { SourceSignal, DataPoint } from './types';
 
 function formatDate(date: Date): string {
@@ -72,6 +72,31 @@ async function fetchDolarBlue(): Promise<DataPoint | null> {
   }
 }
 
+async function fetchRiesgoPais(): Promise<DataPoint | null> {
+  try {
+    const res = await fetch(AMBITO_RIESGO_PAIS_URL, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    // Ámbito returns: { ultimo, fecha, variacion, class-variacion }
+    const valor = parseInt(data.ultimo, 10);
+    if (isNaN(valor)) return null;
+
+    return {
+      metric: 'Riesgo País',
+      currentValue: valor,
+      unit: 'puntos',
+    };
+  } catch (err) {
+    console.warn('Riesgo país fetch failed:', err);
+    return null;
+  }
+}
+
 export async function ingestData(): Promise<SourceSignal[]> {
   const bcraPromises = BCRA_VARIABLES.map((v) =>
     fetchBCRAVariable(v.id, v.metric, v.unit),
@@ -80,6 +105,7 @@ export async function ingestData(): Promise<SourceSignal[]> {
   const results = await Promise.allSettled([
     ...bcraPromises,
     fetchDolarBlue(),
+    fetchRiesgoPais(),
   ]);
 
   const signals: SourceSignal[] = [];
@@ -100,7 +126,7 @@ export async function ingestData(): Promise<SourceSignal[]> {
     signals.push({
       type: 'data',
       text: `${dataPoint.metric}: ${dataPoint.currentValue} ${dataPoint.unit}${prevText}`,
-      source: dataPoint.metric.includes('BCRA') || dataPoint.metric.includes('Base Monetaria')
+      source: dataPoint.metric.includes('BCRA') || dataPoint.metric.includes('Base Monetaria') || dataPoint.metric.includes('Dólar Oficial')
         ? 'BCRA API'
         : 'Ámbito Financiero',
       publishedAt: new Date().toISOString(),

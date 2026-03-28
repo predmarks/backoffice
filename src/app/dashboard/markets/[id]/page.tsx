@@ -14,7 +14,17 @@ import { MarketActions } from './_components/MarketActions';
 import { CopyJsonButton } from './_components/CopyJsonButton';
 import { Markdown } from '../../../_components/Markdown';
 import { ActivityCard } from '@/app/_components/ActivityCard';
-import { ResolutionConfirmButton, ResolutionDismissButton } from './_components/ResolutionActions';
+import { CitedText } from '@/app/_components/CitedText';
+import { EditableField } from '@/app/_components/EditableField';
+import { ResolutionConfirmButton, ResolutionFeedbackButton } from './_components/ResolutionActions';
+
+function formatVolume(vol: string): string {
+  const n = parseFloat(vol) / 1e6;
+  if (isNaN(n) || n === 0) return '0';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toFixed(0);
+}
 
 function formatTimestamp(ts: number): string {
   return new Intl.DateTimeFormat('es-AR', {
@@ -46,6 +56,7 @@ export default async function MarketDetailPage({ params }: Props) {
   if (!market) notFound();
 
   const deployable = toDeployableMarket(market as unknown as Market);
+  const isEditable = ['candidate', 'open'].includes(market.status);
   const review = market.review as Market['review'];
   const resolution = market.resolution as Market['resolution'];
   const sourceContext = market.sourceContext as Market['sourceContext'];
@@ -86,7 +97,7 @@ export default async function MarketDetailPage({ params }: Props) {
   return (
     <div>
       <Link
-        href="/dashboard"
+        href="/"
         className="text-sm text-gray-500 hover:text-gray-900 mb-4 inline-block"
       >
         &larr; Volver
@@ -108,7 +119,7 @@ export default async function MarketDetailPage({ params }: Props) {
       {/* Resolution Suggestion — top of page */}
       {resolution && !market.outcome && (
         <div className={`mb-6 rounded-lg border p-6 ${
-          market.status === 'open' && resolution.suggestedOutcome
+          resolution.suggestedOutcome
             ? 'bg-amber-50 border-amber-300'
             : 'bg-white border-gray-200'
         }`}>
@@ -147,12 +158,12 @@ export default async function MarketDetailPage({ params }: Props) {
             </div>
           )}
 
-          <p className="text-sm text-gray-700 mb-3">{resolution.evidence}</p>
+          <p className="text-sm text-gray-700 mb-3"><CitedText>{resolution.evidence}</CitedText></p>
 
           {resolution.evidenceUrls && resolution.evidenceUrls.length > 0 && (
             <div className="mb-3">
               <a href={resolution.evidenceUrls[0]} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">
-                Fuente principal
+                {new URL(resolution.evidenceUrls[0]).hostname.replace('www.', '')}
               </a>
               {resolution.evidenceUrls.length > 1 && (
                 <div className="mt-1 space-y-0.5">
@@ -169,7 +180,7 @@ export default async function MarketDetailPage({ params }: Props) {
           {resolution.suggestedOutcome && !resolution.confirmedAt && (
             <div className="flex items-center gap-2 pt-2 border-t border-gray-200">
               <ResolutionConfirmButton marketId={market.id} outcome={resolution.suggestedOutcome} />
-              <ResolutionDismissButton marketId={market.id} />
+              <ResolutionFeedbackButton marketId={market.id} />
             </div>
           )}
         </div>
@@ -189,7 +200,7 @@ export default async function MarketDetailPage({ params }: Props) {
               </span>
             )}
           </div>
-          <p className="text-sm text-gray-700 mt-1">{resolution.evidence}</p>
+          <p className="text-sm text-gray-700 mt-1"><CitedText>{resolution.evidence}</CitedText></p>
         </div>
       )}
 
@@ -237,49 +248,134 @@ export default async function MarketDetailPage({ params }: Props) {
           );
         })()}
 
-        <div className="space-y-4">
-          <Section title="Categoría">
-            <span>{market.category}</span>
-            <span className="mx-2">&middot;</span>
-            <TimingSafetyIndicator safety={market.timingSafety as Market['timingSafety']} />
-          </Section>
-
-          <Section title="Descripción">
-            <Markdown className="text-gray-700">{market.description}</Markdown>
-          </Section>
-
-          <Section title="Cierre del mercado">
-            <p className="text-gray-700">{formatTimestamp(market.endTimestamp)}</p>
-          </Section>
-
-          {market.expectedResolutionDate && (
-            <Section title="Fecha esperada de resolución">
-              <p className="text-gray-700">{market.expectedResolutionDate}</p>
-            </Section>
-          )}
-
-          {(market.tags as string[]).length > 0 && (
-            <Section title="Tags">
-              <div className="flex gap-1 flex-wrap">
-                {(market.tags as string[]).map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600"
+        {/* On-chain info */}
+        {market.onchainId && (
+          <div className="mb-4 rounded-md bg-gray-50 border border-gray-200 px-4 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">On-chain</span>
+              <div className="flex items-center gap-3">
+                {market.onchainAddress && (
+                  <a
+                    href={`https://basescan.org/address/${market.onchainAddress}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-600 hover:underline"
                   >
-                    {tag}
-                  </span>
-                ))}
+                    Basescan
+                  </a>
+                )}
+                <a
+                  href={`https://predmarks.com/mercados/${market.onchainId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  Predmarks
+                </a>
               </div>
-            </Section>
-          )}
+            </div>
+            <div className="flex items-center gap-6 text-sm">
+              <div>
+                <span className="text-gray-400 text-xs">ID</span>
+                <p className="font-mono font-medium text-gray-700">#{market.onchainId}</p>
+              </div>
+              {market.volume && (
+                <div>
+                  <span className="text-gray-400 text-xs">Volumen</span>
+                  <p className="font-medium text-gray-700">${formatVolume(market.volume)}</p>
+                </div>
+              )}
+              {market.participants != null && (
+                <div>
+                  <span className="text-gray-400 text-xs">Participantes</span>
+                  <p className="font-medium text-gray-700">{market.participants}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-          {market.outcome && (
-            <Section title="Resultado">
-              <span className="font-bold text-lg">{market.outcome}</span>
+        <details open className="group">
+          <summary className="text-sm font-medium text-gray-500 cursor-pointer list-none flex items-center gap-1 mb-3">
+            <span className="text-[10px] text-gray-400 group-open:rotate-90 transition-transform">&#9654;</span>
+            Detalles
+          </summary>
+          <div className="space-y-4">
+            <Section title="Categoría">
+              <span>{market.category}</span>
+              <span className="mx-2">&middot;</span>
+              <TimingSafetyIndicator safety={market.timingSafety as Market['timingSafety']} />
             </Section>
-          )}
 
-        </div>
+            <Section title="Descripción">
+              {isEditable ? (
+                <EditableField
+                  marketId={market.id}
+                  field="description"
+                  value={market.description}
+                  type="textarea"
+                  className="text-gray-700"
+                  renderMarkdown
+                />
+              ) : (
+                <Markdown className="text-gray-700">{market.description}</Markdown>
+              )}
+            </Section>
+
+            <Section title="Cierre del mercado">
+              {isEditable ? (
+                <EditableField
+                  marketId={market.id}
+                  field="endTimestamp"
+                  value={new Date(market.endTimestamp * 1000).toISOString().slice(0, 16)}
+                  type="datetime"
+                  className="text-gray-700"
+                  displayValue={formatTimestamp(market.endTimestamp)}
+                />
+              ) : (
+                <p className="text-gray-700">{formatTimestamp(market.endTimestamp)}</p>
+              )}
+            </Section>
+
+            <Section title="Fecha esperada de resolución">
+              {isEditable ? (
+                <EditableField
+                  marketId={market.id}
+                  field="expectedResolutionDate"
+                  value={market.expectedResolutionDate ?? ''}
+                  type="date"
+                  className="text-gray-700"
+                  displayValue={market.expectedResolutionDate ?? undefined}
+                />
+              ) : market.expectedResolutionDate ? (
+                <p className="text-gray-700">{market.expectedResolutionDate}</p>
+              ) : (
+                <p className="text-gray-400 italic text-xs">No definida</p>
+              )}
+            </Section>
+
+            {(market.tags as string[]).length > 0 && (
+              <Section title="Tags">
+                <div className="flex gap-1 flex-wrap">
+                  {(market.tags as string[]).map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {market.outcome && (
+              <Section title="Resultado">
+                <span className="font-bold text-lg">{market.outcome}</span>
+              </Section>
+            )}
+          </div>
+        </details>
       </div>
 
       {/* Deployable JSON Preview */}
@@ -609,21 +705,16 @@ const SECTION_COLORS: Record<string, string> = {
 function Section({
   title,
   children,
-  defaultOpen = true,
 }: {
   title: string;
   children: React.ReactNode;
-  defaultOpen?: boolean;
 }) {
   const borderColor = SECTION_COLORS[title] ?? 'border-gray-300';
   return (
-    <details open={defaultOpen} className={`border-l-3 ${borderColor} pl-3 group`}>
-      <summary className="text-base font-semibold text-gray-700 mb-1 cursor-pointer list-none flex items-center gap-1">
-        <span className="text-[10px] text-gray-400 group-open:rotate-90 transition-transform">&#9654;</span>
-        {title}
-      </summary>
+    <div className={`border-l-3 ${borderColor} pl-3`}>
+      <h3 className="text-base font-semibold text-gray-700 mb-1">{title}</h3>
       <div className="text-sm">{children}</div>
-    </details>
+    </div>
   );
 }
 

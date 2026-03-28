@@ -16,7 +16,7 @@ export async function POST(
     return NextResponse.json({ error: 'Market not found' }, { status: 404 });
   }
 
-  const rejectable = ['candidate', 'open'];
+  const rejectable = ['candidate'];
   if (!rejectable.includes(market.status)) {
     return NextResponse.json(
       { error: `Cannot reject a market with status "${market.status}". Must be one of: ${rejectable.join(', ')}.` },

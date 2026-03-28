@@ -50,7 +50,7 @@ export async function login(
     maxAge: SESSION_MAX_AGE,
   });
 
-  redirect('/dashboard');
+  redirect('/');
 }
 
 export async function logout() {

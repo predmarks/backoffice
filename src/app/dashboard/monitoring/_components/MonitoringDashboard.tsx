@@ -31,10 +31,11 @@ const STEP_LABELS: Record<string, string> = {
 const STATUS_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
   candidate: { label: 'Candidato', color: 'text-gray-600', dot: 'bg-gray-400' },
   processing: { label: 'Revisando', color: 'text-amber-600', dot: 'bg-amber-500 animate-pulse' },
-  open: { label: 'Abierto', color: 'text-emerald-600', dot: 'bg-emerald-500' },
-  rejected: { label: 'Rechazado', color: 'text-red-600', dot: 'bg-red-500' },
+  open: { label: 'Abierto', color: 'text-indigo-600', dot: 'bg-indigo-500' },
+  in_resolution: { label: 'En resolución', color: 'text-yellow-600', dot: 'bg-yellow-500' },
+  closed: { label: 'Resuelto', color: 'text-purple-600', dot: 'bg-purple-500' },
+  rejected: { label: 'Rechazado', color: 'text-gray-500', dot: 'bg-gray-400' },
   cancelled: { label: 'Cancelado', color: 'text-orange-600', dot: 'bg-orange-500' },
-  resolved: { label: 'Resuelto', color: 'text-gray-500', dot: 'bg-gray-400' },
 };
 
 const FILTER_CARDS = [

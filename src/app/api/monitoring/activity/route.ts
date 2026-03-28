@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { markets, marketEvents } from '@/db/schema';
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
-import type { Iteration, Review } from '@/db/types';
+import type { Iteration, Review, Resolution } from '@/db/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +20,10 @@ interface MarketMonitorEntry {
   currentStep: string | null;
   stepTimestamp: string | null;
   stale: boolean;
+  volume: string | null;
+  participants: number | null;
+  endTimestamp: number;
+  resolution: { suggestedOutcome?: string; confidence?: string } | null;
 }
 
 export async function GET(request: NextRequest) {
@@ -114,6 +118,8 @@ export async function GET(request: NextRequest) {
       completedAt = review.reviewedAt;
     }
 
+    const resolution = m.resolution as Resolution | null;
+
     return {
       id: m.id,
       title: m.title,
@@ -126,6 +132,12 @@ export async function GET(request: NextRequest) {
       currentStep,
       stepTimestamp,
       stale,
+      volume: m.volume,
+      participants: m.participants,
+      endTimestamp: m.endTimestamp,
+      resolution: resolution?.suggestedOutcome
+        ? { suggestedOutcome: resolution.suggestedOutcome, confidence: resolution.confidence }
+        : null,
     };
   });
 

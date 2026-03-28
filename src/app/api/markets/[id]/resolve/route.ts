@@ -16,9 +16,9 @@ export async function POST(
     return NextResponse.json({ error: 'Market not found' }, { status: 404 });
   }
 
-  if (market.status !== 'closed' && market.status !== 'open') {
+  if (market.status !== 'in_resolution' && market.status !== 'open') {
     return NextResponse.json(
-      { error: `Cannot resolve a market with status "${market.status}". Must be "closed" or "open".` },
+      { error: `Cannot resolve a market with status "${market.status}". Must be "in_resolution" or "open".` },
       { status: 400 },
     );
   }
@@ -50,7 +50,7 @@ export async function POST(
   const [updated] = await db
     .update(markets)
     .set({
-      status: 'resolved',
+      status: 'closed',
       outcome,
       resolvedAt: now,
       resolution,

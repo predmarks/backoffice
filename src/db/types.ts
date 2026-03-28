@@ -2,8 +2,8 @@ export const MARKET_STATUSES = [
   'candidate',
   'processing',
   'open',
+  'in_resolution',
   'closed',
-  'resolved',
   'rejected',
   'cancelled',
 ] as const;
@@ -138,7 +138,7 @@ export interface SourcingStep {
   completedAt?: string;
 }
 
-export const ARCHIVABLE_STATUSES = ['rejected', 'cancelled', 'resolved'] as const;
+export const ARCHIVABLE_STATUSES = ['rejected', 'cancelled', 'closed'] as const;
 
 export const EVENT_TYPES = [
   'pipeline_started', 'pipeline_resumed',

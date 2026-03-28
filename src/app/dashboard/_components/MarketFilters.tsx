@@ -8,8 +8,8 @@ const STATUS_LABELS: Record<MarketStatus, string> = {
   candidate: 'Candidatos',
   processing: 'Procesando',
   open: 'Abiertos',
-  closed: 'Cerrados',
-  resolved: 'Resueltos',
+  in_resolution: 'En resolución',
+  closed: 'Resueltos',
   rejected: 'Rechazados',
   cancelled: 'Cancelados',
 };

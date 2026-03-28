@@ -58,7 +58,7 @@ export default async function ArchivePage({ searchParams }: Props) {
           <option value="">Todos los estados</option>
           <option value="rejected">Rechazados</option>
           <option value="cancelled">Cancelados</option>
-          <option value="resolved">Resueltos</option>
+          <option value="closed">Resueltos</option>
         </select>
         <button
           type="submit"

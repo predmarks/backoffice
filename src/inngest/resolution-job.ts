@@ -1,7 +1,7 @@
 import { inngest } from './client';
 import { db } from '@/db/client';
-import { markets } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { markets, resolutionFeedback } from '@/db/schema';
+import { eq, desc } from 'drizzle-orm';
 import { evaluateResolution } from '@/agents/resolver/evaluator';
 import { logActivity } from '@/lib/activity-log';
 import type { Resolution } from '@/db/types';
@@ -17,11 +17,25 @@ export const resolutionJob = inngest.createFunction(
       return m;
     });
 
-    if (!market || market.status !== 'open') {
-      return { status: 'skipped', reason: 'not open' };
+    if (!market || !['open', 'in_resolution'].includes(market.status)) {
+      return { status: 'skipped', reason: `status: ${market?.status ?? 'not found'}` };
     }
 
     const check = await step.run('evaluate', async () => {
+      // Load market-specific feedback (graceful if table doesn't exist yet)
+      let feedbackTexts: string[] = [];
+      try {
+        const marketFeedback = await db
+          .select({ text: resolutionFeedback.text })
+          .from(resolutionFeedback)
+          .where(eq(resolutionFeedback.marketId, marketId))
+          .orderBy(desc(resolutionFeedback.createdAt))
+          .limit(10);
+        feedbackTexts = marketFeedback.map((r) => r.text);
+      } catch {
+        console.warn('[resolution-job] Could not load resolution feedback, proceeding without it');
+      }
+
       return evaluateResolution({
         title: market.title,
         description: market.description,
@@ -29,6 +43,7 @@ export const resolutionJob = inngest.createFunction(
         resolutionCriteria: market.resolutionCriteria,
         resolutionSource: market.resolutionSource,
         endTimestamp: market.endTimestamp,
+        feedback: feedbackTexts,
       });
     });
 

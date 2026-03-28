@@ -53,7 +53,7 @@ function formatTime(iso: string): string {
 export function MiniChat() {
   const pathname = usePathname();
   const router = useRouter();
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [context, setContext] = useState<ChatContext>(() => detectContext(pathname));
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { db } from '@/db/client';
-import { topics, markets, signals, conversations, topicSignals, globalFeedback, rules as rulesTable, activityLog, config } from '@/db/schema';
+import { topics, markets, signals, conversations, topicSignals, globalFeedback, resolutionFeedback, rules as rulesTable, activityLog, config } from '@/db/schema';
 import { eq, desc, sql, and, gt, inArray } from 'drizzle-orm';
 import { rescoreTopic } from '@/agents/sourcer/scorer';
 import { loadRules } from '@/config/rules';
@@ -10,6 +10,7 @@ import { inngest } from '@/inngest/client';
 import { logActivity } from '@/lib/activity-log';
 import { logUsage } from '@/lib/llm';
 import { loadGenerationPrompt, saveGenerationPrompt } from '@/agents/sourcer/generator';
+import { loadResolutionPrompt, saveResolutionPrompt } from '@/agents/resolver/evaluator';
 
 const client = new Anthropic({ maxRetries: 2 });
 
@@ -420,6 +421,38 @@ const TOOLS: Anthropic.Tool[] = [
       required: ['prompt', 'summary'],
     },
   },
+  {
+    name: 'get_resolution_prompt',
+    description: 'Read the current resolution evaluator system prompt.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
+    name: 'update_resolution_prompt',
+    description: 'Update the resolution evaluator system prompt.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string' as const, description: 'The full updated resolution prompt' },
+        summary: { type: 'string' as const, description: 'Short description of what was changed' },
+      },
+      required: ['prompt', 'summary'],
+    },
+  },
+  {
+    name: 'save_resolution_feedback',
+    description: 'Save feedback about a market resolution for future resolution evaluations. Use for corrections, patterns to watch for, or general resolution guidelines.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        feedback: { type: 'string' as const, description: 'Clear, actionable feedback about resolution' },
+        marketId: { type: 'string' as const, description: 'Optional: market ID this feedback relates to' },
+      },
+      required: ['feedback'],
+    },
+  },
 ];
 
 // --- Tool execution ---
@@ -735,6 +768,31 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     return 'Prompt del chat actualizado. Los cambios se aplican en el próximo mensaje.';
   }
 
+  if (block.name === 'get_resolution_prompt') {
+    const prompt = await loadResolutionPrompt();
+    return prompt;
+  }
+
+  if (block.name === 'update_resolution_prompt') {
+    const { prompt, summary } = block.input as { prompt: string; summary: string };
+    await saveResolutionPrompt(prompt);
+    await logActivity('resolution_prompt_updated', { entityType: 'system', entityLabel: summary, detail: { summary }, source: 'chat' });
+    return 'Prompt de resolución actualizado.';
+  }
+
+  if (block.name === 'save_resolution_feedback') {
+    const { feedback, marketId } = block.input as { feedback: string; marketId?: string };
+    await db.insert(resolutionFeedback).values({ text: feedback, marketId: marketId ?? null });
+    await logActivity('resolution_feedback_saved', {
+      entityType: marketId ? 'market' : 'system',
+      entityId: marketId,
+      entityLabel: feedback.slice(0, 80),
+      detail: { feedback },
+      source: 'chat',
+    });
+    return 'Feedback de resolución guardado. Se usará en futuras evaluaciones.';
+  }
+
   return 'Tool no reconocido.';
 }
 
@@ -789,6 +847,8 @@ export async function POST(request: NextRequest) {
   if (!messages.length || messages[messages.length - 1].role !== 'user') {
     return NextResponse.json({ error: 'Last message must be from user' }, { status: 400 });
   }
+
+  try {
 
   // Build context
   let entityContext = '';
@@ -852,7 +912,13 @@ export async function POST(request: NextRequest) {
 
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
       for (const block of toolUseBlocks) {
-        const result = await executeTool(block, contextType, contextId);
+        let result: string;
+        try {
+          result = await executeTool(block, contextType, contextId);
+        } catch (err) {
+          console.error(`[chat] tool ${block.name} failed:`, err);
+          result = `Error ejecutando ${block.name}: ${err instanceof Error ? err.message : String(err)}`;
+        }
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
       }
       apiMessages.push({ role: 'user', content: toolResults });
@@ -864,7 +930,11 @@ export async function POST(request: NextRequest) {
 
     // Execute any remaining tool calls (side effects on end_turn)
     for (const block of toolUseBlocks) {
-      await executeTool(block, contextType, contextId);
+      try {
+        await executeTool(block, contextType, contextId);
+      } catch (err) {
+        console.error(`[chat] end-turn tool ${block.name} failed:`, err);
+      }
     }
 
     reply = textParts.join('\n\n');
@@ -910,6 +980,12 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ reply, conversation: fullConversation, conversationId: resultConvId, redirect, activityIds });
+
+  } catch (err) {
+    console.error('[chat POST] error:', err);
+    const message = err instanceof Error ? err.message : 'Internal server error';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
 
 // --- DELETE: delete conversation ---

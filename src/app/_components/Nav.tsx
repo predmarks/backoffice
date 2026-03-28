@@ -8,8 +8,8 @@ export function Nav() {
   const pathname = usePathname();
 
   function navLink(href: string, label: string) {
-    const isActive = href === '/dashboard'
-      ? pathname === '/dashboard' || pathname.startsWith('/dashboard/markets')
+    const isActive = href === '/'
+      ? pathname === '/' || pathname.startsWith('/dashboard/markets')
       : pathname.startsWith(href);
     return (
       <Link
@@ -25,7 +25,7 @@ export function Nav() {
   return (
     <nav className="bg-white border-b border-gray-200 px-6 py-3">
       <div className="flex items-center gap-6">
-        <Link href="/dashboard" className="text-lg font-bold text-gray-900">
+        <Link href="/" className="text-lg font-bold text-gray-900">
           Predmarks
         </Link>
 

@@ -25,11 +25,12 @@ interface CallClaudeResult<T> {
   usage: { inputTokens: number; outputTokens: number };
 }
 
-function logUsage(operation: string, model: string, inputTokens: number, outputTokens: number) {
-  db.insert(llmUsage)
-    .values({ operation, model, inputTokens, outputTokens })
-    .execute()
-    .catch(() => { /* fire-and-forget */ });
+async function logUsage(operation: string, model: string, inputTokens: number, outputTokens: number) {
+  try {
+    await db.insert(llmUsage).values({ operation, model, inputTokens, outputTokens });
+  } catch (err) {
+    console.warn('[llm-usage] Failed to log:', operation, err);
+  }
 }
 
 export { client };
@@ -72,7 +73,7 @@ export async function callClaude<T>(
   };
 
   if (options.operation) {
-    logUsage(options.operation, model, usage.inputTokens, usage.outputTokens);
+    await logUsage(options.operation, model, usage.inputTokens, usage.outputTokens);
   }
 
   return { result: toolBlock.input as T, usage };
@@ -117,7 +118,7 @@ export async function callClaudeWithSearch<T>(
   };
 
   if (options.operation) {
-    logUsage(options.operation, model, usage.inputTokens, usage.outputTokens);
+    await logUsage(options.operation, model, usage.inputTokens, usage.outputTokens);
   }
 
   return { result: toolBlock.input as T, usage };

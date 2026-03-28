@@ -22,7 +22,7 @@ export default async function ResolutionPage() {
   const results = await db
     .select()
     .from(markets)
-    .where(and(eq(markets.status, 'closed'), eq(markets.isArchived, false)))
+    .where(and(eq(markets.status, 'in_resolution'), eq(markets.isArchived, false)))
     .orderBy(desc(markets.createdAt));
 
   return (

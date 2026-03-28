@@ -16,7 +16,7 @@ export function TopicActions({ topicId, status }: { topicId: string; status: str
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topicIds: [topicId], count: 1 }),
       });
-      router.push('/dashboard');
+      router.push('/');
     } catch { /* ignore */ } finally {
       setGenerating(false);
     }
@@ -26,7 +26,7 @@ export function TopicActions({ topicId, status }: { topicId: string; status: str
     setDismissing(true);
     try {
       await fetch(`/api/topics/${topicId}/dismiss`, { method: 'POST' });
-      router.push('/dashboard');
+      router.push('/');
     } catch { /* ignore */ } finally {
       setDismissing(false);
     }

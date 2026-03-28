@@ -1,7 +1,8 @@
 import { inngest } from './client';
 import { db } from '@/db/client';
-import { topics as topicsTable, signals as signalsTable, topicSignals } from '@/db/schema';
+import { topics as topicsTable, signals as signalsTable, topicSignals, markets as marketsTable } from '@/db/schema';
 import { eq, inArray, isNotNull, gte, desc } from 'drizzle-orm';
+import type { SourceContext } from '@/db/types';
 import { callClaudeWithSearch } from '@/lib/llm';
 import { updateTopics } from '@/agents/sourcer/topic-extractor';
 import { slugify } from '@/agents/sourcer/types';
@@ -357,7 +358,32 @@ export const suggestTopicJob = inngest.createFunction(
       };
     });
 
-    // Step 3: Log completion
+    // Step 3: Link market to topic if marketId was provided
+    const marketId = event.data.marketId as string | undefined;
+    if (marketId && result.topicId) {
+      await step.run('link-market', async () => {
+        const [market] = await db
+          .select({ id: marketsTable.id, sourceContext: marketsTable.sourceContext })
+          .from(marketsTable)
+          .where(eq(marketsTable.id, marketId));
+
+        if (market) {
+          const ctx = (market.sourceContext as SourceContext) ?? { originType: 'manual' as const, generatedAt: new Date().toISOString() };
+          const existingTopicIds = ctx.topicIds ?? [];
+          if (!existingTopicIds.includes(result.topicId!)) {
+            await db.update(marketsTable).set({
+              sourceContext: {
+                ...ctx,
+                topicIds: [...existingTopicIds, result.topicId!],
+                topicNames: [...(ctx.topicNames ?? []), result.topicName],
+              },
+            }).where(eq(marketsTable.id, marketId));
+          }
+        }
+      });
+    }
+
+    // Step 4: Log completion
     await step.run('log-completion', async () => {
       await logActivity('topic_research_completed', {
         entityType: 'topic',
@@ -369,6 +395,7 @@ export const suggestTopicJob = inngest.createFunction(
           topicSlug: result.topicSlug,
           signalCount: result.signals.length,
           signals: result.signals,
+          ...(marketId ? { linkedMarketId: marketId } : {}),
         },
         source: 'pipeline',
       });
