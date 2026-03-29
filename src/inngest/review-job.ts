@@ -246,6 +246,13 @@ export const reviewJob = inngest.createFunction(
         return result;
       });
 
+      // Early termination: if score delta < 0.5 from previous iteration, stop iterating
+      const isPlateaued = i >= 2 && iterations.length > 0 && (() => {
+        const prevReview = iterations[iterations.length - 1].review;
+        return (scoring.scores.overallScore - prevReview.scores.overallScore) < 0.5;
+      })();
+      const effectivelyLastIteration = i === THRESHOLDS.maxIterations || isPlateaued;
+
       // Build review for this iteration
       const review: ReviewResult = {
         scores: scoring.scores,
@@ -272,7 +279,7 @@ export const reviewJob = inngest.createFunction(
       const hasHardRuleFail = rulesCheck.hardRuleResults.some((r) => !r.passed);
       const isPassing = scoring.scores.overallScore >= THRESHOLDS.passingScore && scoring.recommendation !== 'reject' && !hasHardRuleFail;
 
-      if (isPassing && (!feedback || i === THRESHOLDS.maxIterations)) {
+      if (isPassing && (!feedback || effectivelyLastIteration)) {
         // No feedback to address, or last iteration — finish now
         await step.run(`finish-v${i}`, async () => {
           await db
@@ -289,21 +296,23 @@ export const reviewJob = inngest.createFunction(
         return { status: 'candidate', marketId, iteration: i, score: scoring.scores.overallScore };
       }
 
-      // Last iteration and still not good enough → reject
-      if (i === THRESHOLDS.maxIterations) {
+      // Last iteration (or plateaued) and still not good enough → reject
+      if (effectivelyLastIteration) {
         await step.run('reject-low-score', async () => {
           await db
             .update(markets)
             .set({ review, iterations: updatedIterations, status: 'rejected' })
             .where(eq(markets.id, marketId));
 
+          const rejectReason = isPlateaued ? 'Score plateaued — stopping early' : 'Below threshold after max iterations';
           await logMarketEvent(marketId, 'pipeline_rejected', {
             iteration: i,
-            detail: { score: scoring.scores.overallScore, reason: 'Below threshold after max iterations' },
+            detail: { score: scoring.scores.overallScore, reason: rejectReason },
           });
         });
-        await logActivity('review_completed', { entityType: 'market', entityId: marketId, entityLabel: initResult.market.title, detail: { result: 'rejected', reason: 'Below threshold after max iterations', score: scoring.scores.overallScore, inngestRunUrl: runUrl }, source: 'pipeline' });
-        return { status: 'rejected', marketId, reason: 'Below threshold after max iterations', score: scoring.scores.overallScore };
+        const rejectReason = isPlateaued ? 'Score plateaued — stopping early' : 'Below threshold after max iterations';
+        await logActivity('review_completed', { entityType: 'market', entityId: marketId, entityLabel: initResult.market.title, detail: { result: 'rejected', reason: rejectReason, score: scoring.scores.overallScore, inngestRunUrl: runUrl }, source: 'pipeline' });
+        return { status: 'rejected', marketId, reason: rejectReason, score: scoring.scores.overallScore };
       }
 
       // Improve for next iteration

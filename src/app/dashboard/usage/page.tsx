@@ -1,123 +1,242 @@
 export const dynamic = 'force-dynamic';
 
-import { db } from '@/db/client';
-import { llmUsage } from '@/db/schema';
-import { sql, gte } from 'drizzle-orm';
+import { getUsageData, formatTokens, type OperationUsage } from '@/lib/usage';
+import { TOKEN_BUDGETS } from '@/lib/llm';
 
-const COST_PER_MTOK = {
-  input: { 'claude-sonnet-4-20250514': 3, 'claude-opus-4-20250514': 15 },
-  output: { 'claude-sonnet-4-20250514': 15, 'claude-opus-4-20250514': 75 },
-} as const;
-
-function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const inputRate = (COST_PER_MTOK.input as Record<string, number>)[model] ?? 3;
-  const outputRate = (COST_PER_MTOK.output as Record<string, number>)[model] ?? 15;
-  return (inputTokens * inputRate + outputTokens * outputRate) / 1_000_000;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
-
-interface UsageRow {
-  operation: string;
-  model: string;
-  calls: number;
-  inputTokens: number;
-  outputTokens: number;
-}
-
-async function getUsage(since: Date): Promise<UsageRow[]> {
-  try {
-    const rows = await db
-      .select({
-        operation: llmUsage.operation,
-        model: llmUsage.model,
-        calls: sql<number>`count(*)::int`,
-        inputTokens: sql<number>`sum(${llmUsage.inputTokens})::int`,
-        outputTokens: sql<number>`sum(${llmUsage.outputTokens})::int`,
-      })
-      .from(llmUsage)
-      .where(gte(llmUsage.createdAt, since))
-      .groupBy(llmUsage.operation, llmUsage.model)
-      .orderBy(sql`sum(${llmUsage.inputTokens}) + sum(${llmUsage.outputTokens}) desc`);
-
-    return rows;
-  } catch {
-    return [];
+// Aggregate operation rows across models for bar chart display
+function aggregateByOperation(ops: OperationUsage[]) {
+  const map = new Map<string, { operation: string; cost: number; calls: number; models: Set<string> }>();
+  for (const op of ops) {
+    const existing = map.get(op.operation);
+    if (existing) {
+      existing.cost += op.cost;
+      existing.calls += op.calls;
+      existing.models.add(op.model.includes('opus') ? 'Opus' : 'Sonnet');
+    } else {
+      map.set(op.operation, {
+        operation: op.operation,
+        cost: op.cost,
+        calls: op.calls,
+        models: new Set([op.model.includes('opus') ? 'Opus' : 'Sonnet']),
+      });
+    }
   }
+  return Array.from(map.values())
+    .sort((a, b) => b.cost - a.cost)
+    .map((r) => ({ ...r, models: Array.from(r.models).join(', ') }));
+}
+
+// Aggregate avg output tokens per operation (across models, weighted by calls)
+function aggregateAvgOutput(ops: OperationUsage[]) {
+  const map = new Map<string, { operation: string; totalOutput: number; totalCalls: number }>();
+  for (const op of ops) {
+    const existing = map.get(op.operation);
+    if (existing) {
+      existing.totalOutput += op.avgOutput * op.calls;
+      existing.totalCalls += op.calls;
+    } else {
+      map.set(op.operation, { operation: op.operation, totalOutput: op.avgOutput * op.calls, totalCalls: op.calls });
+    }
+  }
+  return Array.from(map.values()).map((r) => ({
+    operation: r.operation,
+    avgOutput: Math.round(r.totalOutput / r.totalCalls),
+  }));
 }
 
 export default async function UsagePage() {
-  const now = new Date();
-  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  const [day, week, month] = await Promise.all([
-    getUsage(oneDayAgo),
-    getUsage(sevenDaysAgo),
-    getUsage(thirtyDaysAgo),
-  ]);
-
-  function renderTable(rows: UsageRow[], label: string) {
-    const totalInput = rows.reduce((s, r) => s + r.inputTokens, 0);
-    const totalOutput = rows.reduce((s, r) => s + r.outputTokens, 0);
-    const totalCost = rows.reduce((s, r) => s + estimateCost(r.model, r.inputTokens, r.outputTokens), 0);
-    const totalCalls = rows.reduce((s, r) => s + r.calls, 0);
-
+  let data;
+  try {
+    data = await getUsageData();
+  } catch {
     return (
-      <div className="bg-white rounded-lg border border-gray-200 p-5">
-        <div className="flex items-baseline justify-between mb-3">
-          <h2 className="text-sm font-medium text-gray-500">{label}</h2>
-          <div className="text-xs text-gray-400">
-            {totalCalls} llamadas &middot; {formatTokens(totalInput + totalOutput)} tokens &middot; ~${totalCost.toFixed(2)}
-          </div>
-        </div>
-        {rows.length === 0 ? (
-          <p className="text-sm text-gray-400">Sin datos</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
-                <th className="pb-2">Operación</th>
-                <th className="pb-2">Modelo</th>
-                <th className="pb-2 text-right">Llamadas</th>
-                <th className="pb-2 text-right">Input</th>
-                <th className="pb-2 text-right">Output</th>
-                <th className="pb-2 text-right">Costo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const cost = estimateCost(r.model, r.inputTokens, r.outputTokens);
-                const modelShort = r.model.includes('opus') ? 'Opus' : 'Sonnet';
-                return (
-                  <tr key={`${r.operation}-${r.model}`} className="border-b border-gray-50">
-                    <td className="py-1.5 font-mono text-xs">{r.operation}</td>
-                    <td className="py-1.5 text-xs text-gray-500">{modelShort}</td>
-                    <td className="py-1.5 text-right">{r.calls}</td>
-                    <td className="py-1.5 text-right text-gray-600">{formatTokens(r.inputTokens)}</td>
-                    <td className="py-1.5 text-right text-gray-600">{formatTokens(r.outputTokens)}</td>
-                    <td className="py-1.5 text-right font-mono">${cost.toFixed(2)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold">Uso de LLM</h1>
+        <p className="text-sm text-gray-400">Error cargando datos de uso.</p>
       </div>
     );
   }
 
+  const { thisWeek, prevWeek, wowDelta, month, costPerMarket } = data;
+  const maxWeekCost = Math.max(thisWeek.cost, prevWeek.cost, 0.01);
+
+  // Section 2: Cost by operation
+  const aggOps = aggregateByOperation(thisWeek.byOperation);
+  const totalOpCost = aggOps.reduce((s, r) => s + r.cost, 0);
+  const maxOpCost = aggOps[0]?.cost ?? 0.01;
+
+  // Section 3: Token budget calibration
+  const avgOutputByOp = aggregateAvgOutput(month.byOperation);
+
+  // Section 4: Cost per market
+  const maxMarketCost = costPerMarket.markets.reduce((m, r) => Math.max(m, r.cost), 0.01);
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Uso de LLM</h1>
-      {renderTable(day, 'Últimas 24 horas')}
-      {renderTable(week, 'Últimos 7 días')}
-      {renderTable(month, 'Últimos 30 días')}
+
+      {/* Section 1: WoW Summary */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <div className="flex gap-8 items-center mb-4">
+          <div>
+            <div className="text-xs text-gray-400">Esta semana</div>
+            <div className="text-lg font-mono font-bold">${thisWeek.cost.toFixed(2)}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400">Semana anterior</div>
+            <div className="text-lg font-mono">${prevWeek.cost.toFixed(2)}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400">Cambio</div>
+            <div className={`text-lg font-mono font-bold ${wowDelta <= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              {wowDelta > 0 ? '+' : ''}{wowDelta.toFixed(1)}%
+            </div>
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400 w-20 shrink-0">Esta sem.</span>
+            <div className="flex-1 bg-gray-50 rounded-full h-3 overflow-hidden">
+              <div
+                className="h-3 rounded-full bg-green-400 transition-all"
+                style={{ width: `${(thisWeek.cost / maxWeekCost) * 100}%` }}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400 w-20 shrink-0">Sem. ant.</span>
+            <div className="flex-1 bg-gray-50 rounded-full h-3 overflow-hidden">
+              <div
+                className="h-3 rounded-full bg-gray-300 transition-all"
+                style={{ width: `${(prevWeek.cost / maxWeekCost) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Section 2: Cost by Operation */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <div className="flex items-baseline justify-between mb-4">
+          <h2 className="text-sm font-medium text-gray-500">Costo por operaci&oacute;n (7 d&iacute;as)</h2>
+          <span className="text-xs text-gray-400 font-mono">Total: ${totalOpCost.toFixed(2)}</span>
+        </div>
+        {aggOps.length === 0 ? (
+          <p className="text-sm text-gray-400">Sin datos</p>
+        ) : (
+          <div className="space-y-2.5">
+            {aggOps.map((op) => {
+              const pct = Math.max((op.cost / maxOpCost) * 100, 3);
+              const sharePct = totalOpCost > 0 ? (op.cost / totalOpCost * 100).toFixed(0) : '0';
+              return (
+                <div key={op.operation} className="flex items-center gap-3">
+                  <span className="text-xs font-mono text-gray-700 w-36 shrink-0 truncate">{op.operation}</span>
+                  <div className="flex-1 bg-gray-50 rounded-full h-4 overflow-hidden">
+                    <div className="h-4 rounded-full bg-blue-400" style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="text-xs font-mono text-gray-700 w-14 text-right">${op.cost.toFixed(2)}</span>
+                  <span className="text-xs text-gray-400 w-10 text-right">{sharePct}%</span>
+                  <span className="text-xs text-gray-400 w-16 text-right">{op.calls}</span>
+                  <span className="text-xs text-gray-400 w-16 truncate">{op.models}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Section 3: Token Budget Calibration */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <h2 className="text-sm font-medium text-gray-500 mb-4">Calibraci&oacute;n TOKEN_BUDGETS (30 d&iacute;as)</h2>
+        {avgOutputByOp.length === 0 ? (
+          <p className="text-sm text-gray-400">Sin datos</p>
+        ) : (
+          <div className="space-y-2">
+            {avgOutputByOp
+              .filter((op) => op.operation in TOKEN_BUDGETS)
+              .sort((a, b) => {
+                const utilA = a.avgOutput / (TOKEN_BUDGETS[a.operation] ?? 1);
+                const utilB = b.avgOutput / (TOKEN_BUDGETS[b.operation] ?? 1);
+                return utilB - utilA;
+              })
+              .map((op) => {
+                const budget = TOKEN_BUDGETS[op.operation] ?? 0;
+                if (!budget) return null;
+                const utilPct = Math.min((op.avgOutput / budget) * 100, 100);
+                const barColor = utilPct > 80 ? 'bg-red-400' : utilPct > 50 ? 'bg-amber-400' : 'bg-green-400';
+                const textColor = utilPct > 80 ? 'text-red-600' : utilPct > 50 ? 'text-amber-600' : 'text-green-600';
+                return (
+                  <div key={op.operation} className="flex items-center gap-3">
+                    <span className="text-xs font-mono text-gray-700 w-36 shrink-0 truncate">{op.operation}</span>
+                    <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
+                      <div className={`h-3 rounded-full ${barColor}`} style={{ width: `${utilPct}%` }} />
+                    </div>
+                    <span className="text-xs font-mono text-gray-500 w-28 text-right">
+                      {formatTokens(op.avgOutput)} / {formatTokens(budget)}
+                    </span>
+                    <span className={`text-xs font-mono w-10 text-right ${textColor}`}>
+                      {utilPct.toFixed(0)}%
+                    </span>
+                  </div>
+                );
+              })}
+          </div>
+        )}
+      </div>
+
+      {/* Section 4: Cost per Market */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <div className="flex items-baseline justify-between mb-4">
+          <h2 className="text-sm font-medium text-gray-500">Costo por mercado (30 d&iacute;as)</h2>
+          <span className="text-xs text-gray-400 font-mono">
+            Promedio: ${costPerMarket.average.toFixed(2)}/mercado
+          </span>
+        </div>
+        {costPerMarket.markets.length === 0 ? (
+          <p className="text-sm text-gray-400">Sin datos</p>
+        ) : (
+          <div className="space-y-1.5">
+            {costPerMarket.markets.map((m) => {
+              const pct = Math.max((m.cost / maxMarketCost) * 100, 3);
+              const avgPct = (costPerMarket.average / maxMarketCost) * 100;
+              const isAboveAvg = m.cost > costPerMarket.average;
+              const statusColor =
+                m.status === 'open' ? 'bg-indigo-400' :
+                m.status === 'rejected' ? 'bg-gray-300' :
+                m.status === 'candidate' ? 'bg-purple-400' : 'bg-green-400';
+              return (
+                <div key={m.marketId} className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${statusColor}`} />
+                  <span className="text-xs text-gray-700 w-48 truncate" title={m.title}>
+                    {m.title}
+                  </span>
+                  <div className="flex-1 bg-gray-50 rounded-full h-2.5 overflow-hidden relative">
+                    <div
+                      className={`h-2.5 rounded-full ${isAboveAvg ? 'bg-amber-300' : 'bg-blue-300'}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                    <div
+                      className="absolute top-0 bottom-0 w-px bg-gray-400"
+                      style={{ left: `${avgPct}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono text-gray-600 w-12 text-right">${m.cost.toFixed(2)}</span>
+                  <span className="text-xs text-gray-400 w-14 text-right">{m.calls} calls</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Active model overrides — shows what's currently being tested */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <h2 className="text-sm font-medium text-gray-500 mb-2">Notas</h2>
+        <p className="text-xs text-gray-400">
+          Cambios y decisiones de optimizaci&oacute;n se registran en <code className="bg-gray-100 px-1 rounded">docs/optimization-log.md</code>.
+          Overrides de modelo activos se configuran en la tabla <code className="bg-gray-100 px-1 rounded">config</code> con clave <code className="bg-gray-100 px-1 rounded">model_override:&lt;operation&gt;</code>.
+        </p>
+      </div>
     </div>
   );
 }

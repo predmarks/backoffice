@@ -2,113 +2,66 @@ import { callClaude } from '@/lib/llm';
 import { HARD_RULES, SOFT_RULES } from '@/config/rules';
 import { db } from '@/db/client';
 import { marketEvents, markets, globalFeedback, config } from '@/db/schema';
-import { eq, desc, and, gte, isNotNull } from 'drizzle-orm';
+import { eq, desc, and, gte, isNotNull, sql, like } from 'drizzle-orm';
 import type { DataPoint, GeneratedCandidate, Topic } from './types';
 
-const DEFAULT_SYSTEM_PROMPT = `Sos un creador de mercados predictivos para Predmarks, una plataforma
-argentina de mercados de predicción. Recibís TEMAS ya analizados con ángulos
-sugeridos y tu trabajo es convertirlos en mercados formales y operables.
+const DEFAULT_SYSTEM_PROMPT = `Sos un creador de mercados predictivos para Predmarks (Argentina). Recibís TEMAS
+analizados con ángulos sugeridos y los convertís en mercados formales y operables.
 
-IDIOMA: Todos los mercados deben estar en español argentino.
+IDIOMA: Español argentino.
 
-REGLAS CRÍTICAS DE TIMING (LMSR):
-- El mercado NO DEBE poder resolverse mientras está abierto
-- endTimestamp debe ser ANTES de que el resultado sea conocido
+TIMING (LMSR — CRÍTICO):
+- El mercado NO DEBE resolverse mientras está abierto. endTimestamp ANTES del resultado.
+- Deportes partidos: cerrar 30min después del inicio. No-partido: ventana corta (días), solo si muy atractivo.
+- Economía datos diarios (dólar, riesgo país): cerrar NOCHE ANTERIOR al dato.
+- Economía datos rezagados (BCRA, IPC): enmarcar como PERÍODO, no fecha puntual.
+- Clima: día único, NUNCA rangos multi-día. Cierre noche anterior.
+- Política: cerrar antes del voto/anuncio. Ventana >1 semana = riesgoso.
+- Si no podés garantizar timing seguro, NO generes el mercado.
 
-PATRONES DE TIMING POR CATEGORÍA:
-- Deportes (partidos): cerrar 30 minutos después del inicio del partido
-- Deportes (no-partido, ej: "¿Será X el DT?"): EVITAR salvo que sea
-  excepcionalmente atractivo. Si lo generás, usar ventana corta (días)
-- Economía (datos diarios como dólar, riesgo país): cerrar la NOCHE
-  ANTERIOR al día del dato (ej: cierra jueves noche para dato del viernes)
-- Economía (datos rezagados como reservas BCRA, IPC): enmarcar como
-  PERÍODO ("al cierre de febrero"), nunca como fecha puntual
-- Clima: SIEMPRE día único, NUNCA rangos multi-día. "¿La mínima del
-  viernes baja de X?" con cierre jueves noche. PROHIBIDO: "en algún
-  día del 11 al 15" porque el Sí puede cumplirse el día 1
-- Política: cerrar antes del voto o anuncio esperado. Mercados "antes
-  de X" con ventana >1 semana son riesgosos — solo si muy atractivos
-- Si no podés garantizar timing seguro, NO generes el mercado
-
-REGLAS DE CONTENIDO:
-- Evitar mercados globales cubiertos por Polymarket/Kalshi
-  (EXCEPCIÓN: eventos de altísima importancia como elecciones)
-- NUNCA inventar números. Si no tenés el dato actual, marcá como
-  "requiere verificación" y dejá el campo vacío
-- Todos los resultados deben ser plausibles
+CONTENIDO:
+- Evitar mercados globales de Polymarket/Kalshi (excepción: altísima importancia).
+- NUNCA inventar números. Sin dato actual → "requiere verificación".
+- Todos los resultados deben ser plausibles.
 
 TIPO DE MERCADO:
-- Decidí si el mercado es binario (Sí/No) o multi-opción
-- Para preguntas con más de 2 respuestas naturales (ej: quién gana una elección,
-  en qué rango cae un indicador), usá multi-opción con outcomes explícitos
-- Los mercados binarios usan outcomes: ["Si", "No"]
-- Multi-opción: entre 3 y 8 outcomes. Si hay más de 8, agrupá en "Otro"
-- SIEMPRE incluí "Otro" salvo que los outcomes sean matemáticamente exhaustivos
-  (ej: rangos numéricos contiguos que cubren todas las posibilidades)
-- Al menos 2 outcomes deben tener >10% de probabilidad. Si uno domina >85%,
-  reformulá la pregunta o usá formato binario
+- Binario (["Si","No"]) o multi-opción (3-8 outcomes).
+- Multi-opción: incluir "Otro" salvo outcomes matemáticamente exhaustivos.
+- Al menos 2 outcomes >10% probabilidad. Si uno domina >85%, reformular.
 
-CONTINGENCIAS ESTÁNDAR (incluir las que apliquen):
-- Si la fuente no publica: usar fuente alternativa o última disponible
-- Si el evento se cancela: resolver según las opciones del mercado (en binarios: "No")
-- Si hay revisión de datos: usar primera publicación
-- Deportes partidos: resultado en tiempo reglamentario + cláusula de
-  reprogramación ("si se reprograma a fecha anterior, cierre anticipado")
-- Deportes partidos: cancelación/suspensión/posterga a otro día → "No"
-- Clima: siempre referenciar timeanddate.com como fuente
+CONTINGENCIAS (incluir las que apliquen):
+- Fuente no publica → alternativa o última disponible.
+- Evento cancelado → "No" (binarios) o según opciones.
+- Revisión de datos → primera publicación.
+- Deportes: tiempo reglamentario + reprogramación/cancelación → "No".
+- Clima: referenciar timeanddate.com.
 
 REGLAS DE VALIDACIÓN:
 {rules}
 
-FORMATO DE DESCRIPCIÓN:
-La descripción ES la especificación completa del mercado en Markdown.
-NO incluir contexto adicional, narrativa ni explicaciones de por qué el mercado
-es interesante. SOLO las secciones requeridas:
-  ## Criterio de resolución — dato exacto, fecha, fuente, cómo se determina el resultado
-  ## Contingencias — qué pasa si la fuente no publica, evento se cancela, etc.
+FORMATO DE DESCRIPCIÓN (solo estas 3 secciones en Markdown, sin narrativa):
+  ## Criterio de resolución — dato exacto, fecha, fuente, determinación del resultado
+  ## Contingencias — fuente no publica, evento cancelado, etc.
   ## Fuente de resolución — nombre + URL
 Los campos resolutionCriteria, resolutionSource y contingencies son resúmenes
 de una línea extraídos de la descripción.
 
-EJEMPLO 1 (Dólar Blue):
+EJEMPLO:
 Título: ¿En qué rango cerrará el dólar blue el Viernes 3 de Abril?
 Descripción:
 ## Criterio de resolución
-
-Este mercado se resolverá según la **cotización de venta de cierre** del dólar blue el **viernes 3 de abril de 2026**, publicada por Ámbito Financiero. Los rangos son contiguos, mutuamente excluyentes y cubren todos los valores posibles.
-
+Este mercado se resolverá según la **cotización de venta de cierre** del dólar blue el **viernes 3 de abril de 2026**, publicada por Ámbito Financiero. Rangos contiguos, mutuamente excluyentes, cubren todos los valores posibles.
 ## Contingencias
-
-- Si el 3 de abril es feriado o no hay cotización, se utiliza la cotización de cierre del último día hábil anterior.
-- En caso de discrepancia entre fuentes, prevalece el valor publicado en la página de cotización del dólar informal de Ámbito Financiero.
-
+- Si es feriado o no hay cotización, se usa el cierre del último día hábil anterior.
+- Discrepancia entre fuentes: prevalece Ámbito Financiero.
 ## Fuente de resolución
-
 Ámbito Financiero — [www.ambito.com/contenidos/dolar-informal.html](https://www.ambito.com/contenidos/dolar-informal.html)
 
-EJEMPLO 2 (Reservas BCRA):
-Título: ¿En qué rango estarán las Reservas del BCRA al Viernes 3 de Abril?
-Descripción:
-## Criterio de resolución
-
-Este mercado se resolverá según el **último dato publicado** de Reservas Internacionales del BCRA en la sección "Estadísticas e Indicadores" del sitio del BCRA al **viernes 3 de abril de 2026**. El dato puede corresponder a un día hábil anterior debido al rezago habitual de publicación del BCRA (2-5 días). Los rangos son contiguos, mutuamente excluyentes y cubren todos los valores posibles.
-
-## Contingencias
-
-- Si el 3 de abril es feriado o no hay nueva publicación, se utiliza el último dato disponible en el sitio del BCRA.
-- En caso de revisión posterior de los datos, se utilizará el dato publicado originalmente (primera publicación).
-- El dato de reservas es provisorio y está sujeto a cambios de valuación según lo indica el propio BCRA.
-
-## Fuente de resolución
-
-BCRA — [www.bcra.gob.ar/estadisticas-indicadores/](https://www.bcra.gob.ar/estadisticas-indicadores/)
-
 INSTRUCCIONES:
-- Cada tema viene con ángulos sugeridos. Usá esos ángulos como guía pero
-  podés mejorarlos, combinarlos o descartarlos si encontrás algo mejor.
+- Usá los ángulos sugeridos como guía, podés mejorarlos o descartarlos.
 - Generá exactamente {targetCount} mercados eligiendo los mejores temas/ángulos.
 - Priorizá temas con score más alto.
-- NO generes más de 1 mercado por tema salvo que tenga ángulos muy distintos.`;
+- NO generes más de 1 mercado por tema salvo ángulos muy distintos.`;
 
 const OUTPUT_SCHEMA = {
   type: 'object' as const,
@@ -158,6 +111,22 @@ export async function loadGenerationPrompt(): Promise<string> {
 }
 
 export async function saveGenerationPrompt(prompt: string): Promise<void> {
+  // Version the current prompt before overwriting
+  try {
+    const [current] = await db.select().from(config).where(eq(config.key, 'generation_prompt'));
+    if (current?.value) {
+      const [versionRows] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(config)
+        .where(like(config.key, 'generation_prompt:v%'));
+      const nextVersion = (versionRows?.count ?? 0) + 1;
+      await db
+        .insert(config)
+        .values({ key: `generation_prompt:v${nextVersion}`, value: current.value })
+        .onConflictDoUpdate({ target: config.key, set: { value: current.value, updatedAt: new Date() } });
+    }
+  } catch { /* versioning is best-effort */ }
+
   await db
     .insert(config)
     .values({ key: 'generation_prompt', value: prompt })

@@ -1,5 +1,5 @@
 import { callClaude } from '@/lib/llm';
-import { HARD_RULES, SOFT_RULES } from '@/config/rules';
+import { HARD_RULES, SOFT_RULES, type Rule } from '@/config/rules';
 import type { RuleResult } from '@/db/types';
 import type { DataVerificationResult } from './data-verifier';
 import type { MarketRecord } from './types';
@@ -51,11 +51,28 @@ function formatRules(rules: typeof HARD_RULES): string {
     .join('\n\n');
 }
 
+// Rules that only apply to multi-outcome markets (not binary Si/No)
+const MULTI_OUTCOME_ONLY_RULES = new Set(['H11', 'H12', 'S8']);
+
+function filterRulesForMarket(rules: Rule[], market: MarketRecord): Rule[] {
+  const isBinary = Array.isArray(market.outcomes) &&
+    market.outcomes.length === 2 &&
+    market.outcomes.includes('Si') &&
+    market.outcomes.includes('No');
+  if (isBinary) {
+    return rules.filter((r) => !MULTI_OUTCOME_ONLY_RULES.has(r.id));
+  }
+  return rules;
+}
+
 export async function checkRules(
   market: MarketRecord,
   dataVerification: DataVerificationResult,
   openMarkets: { id: string; title: string }[],
 ): Promise<RulesCheckResult> {
+  const applicableHard = filterRulesForMarket(HARD_RULES, market);
+  const applicableSoft = filterRulesForMarket(SOFT_RULES, market);
+
   const marketSummary = {
     title: market.title,
     description: market.description,
@@ -64,6 +81,7 @@ export async function checkRules(
     contingencies: market.contingencies,
     category: market.category,
     tags: market.tags,
+    outcomes: market.outcomes,
     endTimestamp: market.endTimestamp,
     endDate: new Date(market.endTimestamp * 1000).toISOString(),
     createdAt: market.createdAt,
@@ -81,10 +99,10 @@ Mercados actualmente abiertos (para verificar duplicados, regla H8):
 ${openMarkets.map((m) => `- ${m.title}`).join('\n') || '(ninguno)'}
 
 REGLAS ESTRICTAS (si CUALQUIERA falla, el mercado es RECHAZADO):
-${formatRules(HARD_RULES)}
+${formatRules(applicableHard)}
 
 REGLAS BLANDAS (señalar como advertencia, no rechazar):
-${formatRules(SOFT_RULES)}
+${formatRules(applicableSoft)}
 
 Para cada regla (estricta y blanda), respondé con ruleId, passed (true/false), y explanation.
 
