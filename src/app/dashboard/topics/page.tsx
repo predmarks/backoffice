@@ -16,7 +16,7 @@ interface TopicData {
   signalCount: number;
   lastSignalAt: string | null;
   lastGeneratedAt: string | null;
-  conversationCount?: number;
+  marketCount?: number;
 }
 
 function formatDate(dateStr: string): string {
@@ -176,23 +176,29 @@ export default function TopicsPage() {
   }
 
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<'score' | 'recency' | 'signals'>('score');
+  const [marketFilter, setMarketFilter] = useState<'all' | 'with' | 'without'>('all');
+  const [sortBy, setSortBy] = useState<'score' | 'recency' | 'signals' | 'markets'>('score');
 
   const CATEGORIES = ['Política', 'Economía', 'Deportes', 'Entretenimiento', 'Clima', 'Otros'];
 
-  const filteredTopics = (categoryFilter
-    ? topics.filter((t) => t.category === categoryFilter || t.status === 'researching')
-    : topics
-  ).sort((a, b) => {
-    if (a.status === 'researching') return -1;
-    if (b.status === 'researching') return 1;
-    if (sortBy === 'score') return b.score - a.score;
-    if (sortBy === 'signals') return b.signalCount - a.signalCount;
-    // recency
-    const aTime = a.lastSignalAt ? new Date(a.lastSignalAt).getTime() : 0;
-    const bTime = b.lastSignalAt ? new Date(b.lastSignalAt).getTime() : 0;
-    return bTime - aTime;
-  });
+  const filteredTopics = topics
+    .filter((t) => {
+      if (categoryFilter && t.category !== categoryFilter && t.status !== 'researching') return false;
+      if (marketFilter === 'with' && !(t.marketCount && t.marketCount > 0)) return false;
+      if (marketFilter === 'without' && t.marketCount && t.marketCount > 0) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.status === 'researching') return -1;
+      if (b.status === 'researching') return 1;
+      if (sortBy === 'score') return b.score - a.score;
+      if (sortBy === 'signals') return b.signalCount - a.signalCount;
+      if (sortBy === 'markets') return (b.marketCount ?? 0) - (a.marketCount ?? 0);
+      // recency
+      const aTime = a.lastSignalAt ? new Date(a.lastSignalAt).getTime() : 0;
+      const bTime = b.lastSignalAt ? new Date(b.lastSignalAt).getTime() : 0;
+      return bTime - aTime;
+    });
 
   const categoryCounts = CATEGORIES.reduce<Record<string, number>>((acc, cat) => {
     acc[cat] = topics.filter((t) => t.category === cat && t.status !== 'researching').length;
@@ -260,12 +266,26 @@ export default function TopicsPage() {
       {topics.length > 0 && (
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400">Ordenar:</span>
-          {([['score', 'Score'], ['signals', 'Señales'], ['recency', 'Recientes']] as const).map(([key, label]) => (
+          {([['score', 'Score'], ['signals', 'Señales'], ['markets', 'Mercados'], ['recency', 'Recientes']] as const).map(([key, label]) => (
             <button
               key={key}
               onClick={() => setSortBy(key)}
               className={`px-2 py-0.5 text-xs rounded border transition-colors cursor-pointer ${
                 sortBy === key
+                  ? 'bg-gray-800 text-white border-gray-800'
+                  : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+          <span className="text-xs text-gray-300 mx-1">|</span>
+          {([['all', 'Todos'], ['with', 'Con mercados'], ['without', 'Sin mercados']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMarketFilter(key)}
+              className={`px-2 py-0.5 text-xs rounded border transition-colors cursor-pointer ${
+                marketFilter === key
                   ? 'bg-gray-800 text-white border-gray-800'
                   : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
               }`}
@@ -389,8 +409,8 @@ export default function TopicsPage() {
                       t.signalCount >= 5 ? 'bg-yellow-100 text-yellow-700' :
                       'text-gray-300'
                     }`}>{t.signalCount} señales</span>
-                    {(t.conversationCount ?? 0) > 0 && (
-                      <span className="hidden md:inline text-[10px] text-gray-300 shrink-0">{t.conversationCount} chat{t.conversationCount !== 1 ? 's' : ''}</span>
+                    {(t.marketCount ?? 0) > 0 && (
+                      <span className="hidden md:inline shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-50 text-indigo-600">{t.marketCount} mercado{t.marketCount !== 1 ? 's' : ''}</span>
                     )}
                   </>
                 )}
@@ -438,8 +458,8 @@ export default function TopicsPage() {
                     t.signalCount >= 5 ? 'bg-yellow-100 text-yellow-700' :
                     'text-gray-300'
                   }`}>{t.signalCount} señales</span>
-                  {(t.conversationCount ?? 0) > 0 && (
-                    <span className="text-[10px] text-gray-300 shrink-0">{t.conversationCount} chat{t.conversationCount !== 1 ? 's' : ''}</span>
+                  {(t.marketCount ?? 0) > 0 && (
+                    <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-50 text-indigo-600">{t.marketCount} mercado{t.marketCount !== 1 ? 's' : ''}</span>
                   )}
                   <button
                     onClick={(e) => { e.stopPropagation(); openDismissPrompt(t.id); }}
@@ -476,8 +496,8 @@ export default function TopicsPage() {
 
                   <div className="flex items-center gap-3 text-xs text-gray-400">
                     <span>{t.signalCount} señales</span>
-                    {(t.conversationCount ?? 0) > 0 && (
-                      <span>{t.conversationCount} chat{t.conversationCount !== 1 ? 's' : ''}</span>
+                    {(t.marketCount ?? 0) > 0 && (
+                      <span>{t.marketCount} mercado{t.marketCount !== 1 ? 's' : ''}</span>
                     )}
                     {t.lastSignalAt && (
                       <span>última: {formatDate(t.lastSignalAt)}</span>

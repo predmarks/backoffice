@@ -144,7 +144,10 @@ export default function DedupPage() {
   const fetchPairs = useCallback(async () => {
     try {
       const res = await fetch('/api/topics/dedup');
-      if (!res.ok) throw new Error('Failed to fetch');
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Error ${res.status}`);
+      }
       const data = await res.json();
       setPairs(data.pairs ?? []);
     } catch (e) {

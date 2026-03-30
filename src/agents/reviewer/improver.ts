@@ -24,13 +24,14 @@ const OUTPUT_SCHEMA = {
     contingencies: { type: 'string' as const, description: 'Contingencias mejoradas' },
     category: { type: 'string' as const, enum: ['Política', 'Economía', 'Deportes', 'Entretenimiento', 'Clima', 'Otros'] },
     tags: { type: 'array' as const, items: { type: 'string' as const } },
+    outcomes: { type: 'array' as const, items: { type: 'string' as const }, description: 'Opciones del mercado. Binarios: ["Si", "No"]. Multi-opción: listar todas las opciones (3-8). Incluir "Otro" salvo que sean matemáticamente exhaustivas.' },
     endTimestamp: { type: 'number' as const, description: 'Unix timestamp del cierre (ajustar si timing es inseguro)' },
     expectedResolutionDate: { type: 'string' as const, description: 'Fecha esperada YYYY-MM-DD' },
     timingSafety: { type: 'string' as const, enum: ['safe', 'caution', 'dangerous'] },
   },
   required: [
     'title', 'description', 'resolutionCriteria', 'resolutionSource',
-    'contingencies', 'category', 'tags', 'endTimestamp',
+    'contingencies', 'category', 'tags', 'outcomes', 'endTimestamp',
     'expectedResolutionDate', 'timingSafety',
   ] as const,
 };
@@ -76,6 +77,7 @@ export async function improveMarket(
     contingencies: market.contingencies,
     category: market.category,
     tags: (market as unknown as { tags: string[] }).tags,
+    outcomes: market.outcomes,
     endTimestamp: market.endTimestamp,
     endDate: new Date(market.endTimestamp * 1000).toISOString(),
     expectedResolutionDate: market.expectedResolutionDate,
@@ -108,7 +110,18 @@ PRIORIDADES:
 Cláusulas de contingencia estándar disponibles:
 ${formatContingencyTemplates()}
 
-HOY: ${new Date().toISOString().split('T')[0]}
+${(() => {
+  const now = Math.floor(Date.now() / 1000);
+  const today = new Date().toISOString().split('T')[0];
+  return `HOY: ${today} (Unix timestamp: ${now})
+REFERENCIA TIMESTAMPS (para calcular endTimestamp):
+- Hoy ${today} = ${now}
+- En 7 días = ${now + 7 * 86400}
+- En 30 días = ${now + 30 * 86400}
+- En 90 días = ${now + 90 * 86400}
+- En 120 días = ${now + 120 * 86400}
+IMPORTANTE: endTimestamp DEBE ser mayor que ${now} (hoy). Si el timestamp actual del mercado es menor, corregilo.`;
+})()}
 
 Devolvé el mercado COMPLETO con todas las mejoras aplicadas.`;
 

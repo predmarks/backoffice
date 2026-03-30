@@ -8,7 +8,9 @@ import { loadRules } from '@/config/rules';
 import { slugify } from '@/agents/sourcer/types';
 import { inngest } from '@/inngest/client';
 import { logActivity } from '@/lib/activity-log';
+import { logMarketEvent } from '@/lib/market-events';
 import { logUsage } from '@/lib/llm';
+import type { SourceContext } from '@/db/types';
 import { getUserTimezone } from '@/lib/timezone';
 import { loadGenerationPrompt, saveGenerationPrompt } from '@/agents/sourcer/generator';
 import { loadResolutionPrompt, saveResolutionPrompt } from '@/agents/resolver/evaluator';
@@ -65,6 +67,12 @@ OPERACIONES COSTOSAS (sugerir pero SIEMPRE pedir confirmación):
 - Guardar un ángulo NO crea un mercado. Es solo una idea guardada para referencia futura.
 - Los ángulos son preguntas concretas para mercados predictivos (binarios sí/no o multi-opción).
 - Discutir ángulos es brainstorming libre. Crear mercados (generate_markets) es un paso separado que requiere confirmación.
+
+FECHAS DE CIERRE:
+- El cierre de un mercado se guarda como endTimestamp (Unix timestamp en segundos).
+- NUNCA calcules timestamps vos mismo — siempre usá la herramienta date_to_timestamp para convertir fechas.
+- Flujo: 1) llamá date_to_timestamp con la fecha deseada, 2) usá el timestamp devuelto en update_market.
+- Ejemplo: usuario pide "cerrar el 31 de julio 2026" → llamá date_to_timestamp("2026-07-31T23:00:00-03:00") → recibís el timestamp → llamá update_market con ese endTimestamp.
 
 COMPORTAMIENTO GENERAL:
 - Respuestas cortas. Si la acción se completó, confirmá en una oración.
@@ -256,6 +264,41 @@ const TOOLS: Anthropic.Tool[] = [
         angle: { type: 'string' as const, description: 'Pregunta concreta para mercado predictivo (binario o multi-opción)' },
       },
       required: ['topicId', 'angle'],
+    },
+  },
+  {
+    name: 'link_market_topic',
+    description: 'Associate a market with a topic. Adds the topic to the market\'s sourceContext.topicIds.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        marketId: { type: 'string' as const, description: 'ID del mercado' },
+        topicId: { type: 'string' as const, description: 'ID del tema a asociar' },
+      },
+      required: ['marketId', 'topicId'],
+    },
+  },
+  {
+    name: 'unlink_market_topic',
+    description: 'Dissociate a market from a topic. Removes the topic from the market\'s sourceContext.topicIds.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        marketId: { type: 'string' as const, description: 'ID del mercado' },
+        topicId: { type: 'string' as const, description: 'ID del tema a desasociar' },
+      },
+      required: ['marketId', 'topicId'],
+    },
+  },
+  {
+    name: 'date_to_timestamp',
+    description: 'Convert a date string to Unix timestamp (seconds). ALWAYS use this tool before calling update_market with endTimestamp — never compute timestamps yourself.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        date: { type: 'string' as const, description: 'Fecha en formato ISO, ej: "2026-07-31T23:00:00-03:00" o "2026-07-31". Si no se especifica hora, usa 23:59 AR.' },
+      },
+      required: ['date'],
     },
   },
   {
@@ -604,16 +647,75 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     return `Ángulo guardado: "${angle}"`;
   }
 
+  if (block.name === 'date_to_timestamp') {
+    const { date: dateStr } = block.input as { date: string };
+    let d: Date;
+    if (dateStr.includes('T') || dateStr.includes('+') || dateStr.includes('Z')) {
+      d = new Date(dateStr);
+    } else {
+      // Date only — assume 23:59 Argentina time (UTC-3)
+      d = new Date(`${dateStr}T23:59:00-03:00`);
+    }
+    if (isNaN(d.getTime())) return `Fecha inválida: "${dateStr}". Usá formato ISO, ej: "2026-07-31T23:00:00-03:00"`;
+    const timestamp = Math.floor(d.getTime() / 1000);
+    return `Timestamp: ${timestamp} (${d.toISOString()})`;
+  }
+
+  if (block.name === 'link_market_topic') {
+    const { marketId, topicId } = block.input as { marketId: string; topicId: string };
+    const [market] = await db.select({ title: markets.title, sourceContext: markets.sourceContext }).from(markets).where(eq(markets.id, marketId));
+    if (!market) return 'Mercado no encontrado.';
+    const [topic] = await db.select({ name: topics.name }).from(topics).where(eq(topics.id, topicId));
+    if (!topic) return 'Tema no encontrado.';
+    const ctx = (market.sourceContext as { topicIds?: string[] } | null) ?? {};
+    const existing = ctx.topicIds ?? [];
+    if (existing.includes(topicId)) return `El mercado ya está asociado a "${topic.name}".`;
+    const updated = { ...ctx, topicIds: [...existing, topicId] } as SourceContext;
+    await db.update(markets).set({ sourceContext: updated }).where(eq(markets.id, marketId));
+    await logMarketEvent(marketId, 'human_edited', { detail: { action: 'link_topic', topicId, topicName: topic.name, source: 'chat' } });
+    await logActivity('market_updated', { entityType: 'market', entityId: marketId, entityLabel: market.title, detail: { action: 'linked_topic', topicId, topicName: topic.name }, source: 'chat' });
+    return `Mercado "${market.title}" asociado a tema "${topic.name}".`;
+  }
+
+  if (block.name === 'unlink_market_topic') {
+    const { marketId, topicId } = block.input as { marketId: string; topicId: string };
+    const [market] = await db.select({ title: markets.title, sourceContext: markets.sourceContext }).from(markets).where(eq(markets.id, marketId));
+    if (!market) return 'Mercado no encontrado.';
+    const [topic] = await db.select({ name: topics.name }).from(topics).where(eq(topics.id, topicId));
+    const ctx = (market.sourceContext as { topicIds?: string[] } | null) ?? {};
+    const existing = ctx.topicIds ?? [];
+    if (!existing.includes(topicId)) return 'El mercado no está asociado a ese tema.';
+    const updated = { ...ctx, topicIds: existing.filter((id) => id !== topicId) } as SourceContext;
+    await db.update(markets).set({ sourceContext: updated }).where(eq(markets.id, marketId));
+    await logMarketEvent(marketId, 'human_edited', { detail: { action: 'unlink_topic', topicId, topicName: topic?.name, source: 'chat' } });
+    await logActivity('market_updated', { entityType: 'market', entityId: marketId, entityLabel: market.title, detail: { action: 'unlinked_topic', topicId, topicName: topic?.name }, source: 'chat' });
+    return `Mercado "${market.title}" desasociado de tema "${topic?.name ?? topicId}".`;
+  }
+
   if (block.name === 'update_market') {
     const { marketId, ...fields } = block.input as Record<string, unknown>;
+    const allowedFields = ['title', 'description', 'resolutionCriteria', 'resolutionSource', 'contingencies', 'category', 'tags', 'outcomes', 'endTimestamp', 'expectedResolutionDate', 'timingSafety', 'status'];
     const updates: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(fields)) {
-      if (v !== undefined) updates[k] = v;
+    for (const key of allowedFields) {
+      if (fields[key] !== undefined) {
+        // Coerce numeric fields
+        if (key === 'endTimestamp') {
+          updates[key] = Number(fields[key]);
+        } else {
+          updates[key] = fields[key];
+        }
+      }
     }
-    if (Object.keys(updates).length > 0) {
-      await db.update(markets).set(updates).where(eq(markets.id, marketId as string));
-    }
-    return 'Mercado actualizado.';
+    if (Object.keys(updates).length === 0) return 'Sin cambios.';
+    const [updated] = await db.update(markets).set(updates).where(eq(markets.id, marketId as string)).returning({ id: markets.id, title: markets.title, endTimestamp: markets.endTimestamp });
+    if (!updated) return 'Mercado no encontrado.';
+    await logMarketEvent(marketId as string, 'human_edited', { detail: { fields: Object.keys(updates), source: 'chat' } });
+    await logActivity('market_updated', { entityType: 'market', entityId: marketId as string, entityLabel: updated.title, detail: updates, source: 'chat' });
+    const confirmParts = Object.keys(updates).map((k) => {
+      if (k === 'endTimestamp') return `cierre: ${new Date(Number(updates[k]) * 1000).toISOString()}`;
+      return k;
+    });
+    return `Mercado actualizado: ${confirmParts.join(', ')}`;
   }
 
   if (block.name === 'update_signal') {

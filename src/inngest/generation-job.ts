@@ -7,6 +7,7 @@ import { deduplicateCandidates } from '@/agents/sourcer/deduplication';
 import type { Topic } from '@/agents/sourcer/types';
 import { logActivity, inngestRunUrl } from '@/lib/activity-log';
 import { setCurrentRunId } from '@/lib/llm';
+import { validateMarket } from '@/lib/validate-market';
 
 export const generationJob = inngest.createFunction(
   { id: 'generation-pipeline', retries: 5, concurrency: { limit: 1 } },
@@ -102,6 +103,15 @@ export const generationJob = inngest.createFunction(
     const savedIds = await step.run('save', async () => {
       const ids: string[] = [];
       for (const candidate of unique) {
+        // Validate and fix LLM output
+        const validation = validateMarket(candidate);
+        if (Object.keys(validation.fixes).length > 0) {
+          console.log(`[generation] Fixes for "${candidate.title}":`, validation.fixes);
+        }
+        if (validation.warnings.length > 0) {
+          console.warn(`[generation] Warnings for "${candidate.title}":`, validation.warnings);
+        }
+
         const [inserted] = await db
           .insert(markets)
           .values({
@@ -115,7 +125,7 @@ export const generationJob = inngest.createFunction(
             tags: candidate.tags,
             endTimestamp: candidate.endTimestamp,
             expectedResolutionDate: candidate.expectedResolutionDate,
-            timingSafety: 'caution',
+            timingSafety: Object.keys(validation.fixes).length > 0 ? 'caution' : 'caution',
             sourceContext: {
               originType: 'news' as const,
               generatedAt: new Date().toISOString(),

@@ -82,6 +82,7 @@ export interface MarketSnapshot {
   contingencies: string;
   category: MarketCategory;
   tags: string[];
+  outcomes: string[];
   endTimestamp: number;
   expectedResolutionDate: string;
   timingSafety: TimingSafety;
@@ -92,6 +93,7 @@ export interface Iteration {
   market: MarketSnapshot;
   review: ReviewResult;
   feedback?: string;
+  changes?: Record<string, { from: unknown; to: unknown }>;
 }
 
 export interface Resolution {

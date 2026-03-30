@@ -245,9 +245,18 @@ export async function generateMarkets(
   const userMessage = `DATOS ACTUALES (no inventar otros):
 ${formatDataPoints(dataPoints)}
 
-HOY: ${today}
+${(() => {
+  const now = Math.floor(Date.now() / 1000);
+  return `HOY: ${today} (Unix timestamp: ${now})
 AÑO ACTUAL: ${new Date().getFullYear()}
-IMPORTANTE: Todos los endTimestamp y expectedResolutionDate deben ser en el año ${new Date().getFullYear()}.
+REFERENCIA TIMESTAMPS (para calcular endTimestamp):
+- Hoy = ${now}
+- En 7 días = ${now + 7 * 86400}
+- En 30 días = ${now + 30 * 86400}
+- En 90 días = ${now + 90 * 86400}
+- En 120 días = ${now + 120 * 86400}
+IMPORTANTE: endTimestamp DEBE ser mayor que ${now}. Usá las referencias de arriba para calcular.`;
+})()}
 ${globalFeedbackText}${triageFeedback}
 MERCADOS ABIERTOS (no duplicar):
 ${openMarketTitles.length > 0 ? openMarketTitles.map((t) => `- ${t}`).join('\n') : 'Ninguno'}

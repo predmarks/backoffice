@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { topics } from '@/db/schema';
-import { inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { getEmbeddings, cosineSimilarity } from '@/agents/sourcer/deduplication';
 import OpenAI from 'openai';
+
+const EMBEDDING_BATCH_SIZE = 50;
 
 const SIMILARITY_THRESHOLD = 0.80;
 
@@ -35,10 +37,16 @@ export async function GET() {
   }
 
   if (needsEmbedding.length > 0) {
-    const texts = needsEmbedding.map((t) => `${t.name}: ${t.summary}`);
-    const embeddings = await getEmbeddings(openai, texts);
-    for (let i = 0; i < needsEmbedding.length; i++) {
-      cachedEmbeddings.set(needsEmbedding[i].id, embeddings[i]);
+    // Batch embedding requests to avoid timeouts
+    for (let batch = 0; batch < needsEmbedding.length; batch += EMBEDDING_BATCH_SIZE) {
+      const slice = needsEmbedding.slice(batch, batch + EMBEDDING_BATCH_SIZE);
+      const texts = slice.map((t) => `${t.name}: ${t.summary}`);
+      const embeddings = await getEmbeddings(openai, texts);
+      for (let i = 0; i < slice.length; i++) {
+        cachedEmbeddings.set(slice[i].id, embeddings[i]);
+        // Cache in DB for next time
+        await db.update(topics).set({ embedding: embeddings[i] }).where(eq(topics.id, slice[i].id));
+      }
     }
   }
 

@@ -12,6 +12,7 @@ import { improveMarket } from '@/agents/reviewer/improver';
 import { logMarketEvent } from '@/lib/market-events';
 import { logActivity, inngestRunUrl } from '@/lib/activity-log';
 import { setCurrentRunId } from '@/lib/llm';
+import { validateMarket } from '@/lib/validate-market';
 import type { MarketRecord } from '@/agents/reviewer/types';
 
 function buildFeedback(
@@ -68,6 +69,7 @@ function marketToSnapshot(market: MarketRecord): MarketSnapshot {
     contingencies: market.contingencies,
     category: market.category as MarketSnapshot['category'],
     tags: market.tags,
+    outcomes: market.outcomes,
     endTimestamp: market.endTimestamp,
     expectedResolutionDate: market.expectedResolutionDate ?? '',
     timingSafety: market.timingSafety as MarketSnapshot['timingSafety'],
@@ -338,6 +340,37 @@ export const reviewJob = inngest.createFunction(
         const allHumanFeedback = [...globalFeedbackEntries, ...humanFeedback, ...triageFeedback];
         const improved = await improveMarket(currentMarket, feedback, updatedIterations, allHumanFeedback);
 
+        // Validate and fix LLM output
+        const validation = validateMarket(improved);
+        if (Object.keys(validation.fixes).length > 0) {
+          console.log(`[review] Validation fixes for "${improved.title}":`, validation.fixes);
+          improved.timingSafety = 'caution';
+        }
+        if (validation.warnings.length > 0) {
+          console.warn(`[review] Validation warnings:`, validation.warnings);
+        }
+
+        // Compute what changed for logging
+        const changes: Record<string, { from: unknown; to: unknown }> = {};
+        const trackFields = ['title', 'description', 'resolutionCriteria', 'resolutionSource', 'contingencies', 'category', 'outcomes', 'endTimestamp', 'expectedResolutionDate', 'timingSafety'] as const;
+        for (const field of trackFields) {
+          const prev = currentMarket[field];
+          const next = improved[field];
+          if (JSON.stringify(prev) !== JSON.stringify(next)) {
+            changes[field] = { from: prev, to: next };
+          }
+        }
+
+        // Store changes in the iteration for visibility
+        if (Object.keys(changes).length > 0 && updatedIterations.length > 0) {
+          updatedIterations[updatedIterations.length - 1].changes = changes;
+          // Re-save iterations with changes included
+          await db
+            .update(markets)
+            .set({ iterations: updatedIterations })
+            .where(eq(markets.id, marketId));
+        }
+
         // Apply improved snapshot to market
         await db
           .update(markets)
@@ -349,6 +382,7 @@ export const reviewJob = inngest.createFunction(
             contingencies: improved.contingencies,
             category: improved.category,
             tags: improved.tags,
+            outcomes: improved.outcomes,
             endTimestamp: improved.endTimestamp,
             expectedResolutionDate: improved.expectedResolutionDate,
             timingSafety: improved.timingSafety,
@@ -357,7 +391,7 @@ export const reviewJob = inngest.createFunction(
 
         await logMarketEvent(marketId, 'improved', {
           iteration: i,
-          detail: { titleChanged: improved.title !== currentMarket.title },
+          detail: { changes },
         });
       });
     }

@@ -20,7 +20,7 @@ export async function GET() {
       feedback: topics.feedback,
       createdAt: topics.createdAt,
       updatedAt: topics.updatedAt,
-      conversationCount: sql<number>`(SELECT count(*)::int FROM conversations WHERE conversations.context_type = 'topic' AND conversations.context_id = "topics"."id")`.mapWith(Number),
+      marketCount: sql<number>`(SELECT count(*)::int FROM markets WHERE markets.source_context->'topicIds' @> to_jsonb("topics"."id") AND markets.status IN ('open', 'in_resolution'))`.mapWith(Number),
     })
     .from(topics)
     .where(inArray(topics.status, ['researching', 'active', 'stale']))
