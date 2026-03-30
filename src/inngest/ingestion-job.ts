@@ -99,7 +99,7 @@ export const ingestionJob = inngest.createFunction(
         }));
 
         // Call LLM to match/create topics
-        const topicUpdates = await updateTopics(ingestionResult.signals, existingTopics);
+        const topicUpdates = await updateTopics(ingestionResult.signals, existingTopics) ?? [];
 
         const now = new Date();
         const updatedTopicIds: string[] = [];

@@ -4,6 +4,7 @@ import { markets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { inngest } from '@/inngest/client';
 import { logMarketEvent } from '@/lib/market-events';
+import { logActivity } from '@/lib/activity-log';
 
 export async function POST(
   _request: NextRequest,
@@ -32,6 +33,12 @@ export async function POST(
     .where(eq(markets.id, id));
 
   await logMarketEvent(id, 'pipeline_cancelled');
+  await logActivity('market_cancelled', {
+    entityType: 'market',
+    entityId: id,
+    entityLabel: market.title,
+    source: 'ui',
+  });
 
   return NextResponse.json({ id, status: 'cancelled' });
 }

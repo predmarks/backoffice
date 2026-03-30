@@ -3,6 +3,7 @@ import { db } from '@/db/client';
 import { markets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { logMarketEvent } from '@/lib/market-events';
+import { logActivity } from '@/lib/activity-log';
 import { ARCHIVABLE_STATUSES } from '@/db/types';
 
 export async function POST(
@@ -30,6 +31,12 @@ export async function POST(
     .returning();
 
   await logMarketEvent(id, 'human_archived');
+  await logActivity('market_archived', {
+    entityType: 'market',
+    entityId: id,
+    entityLabel: market.title,
+    source: 'ui',
+  });
 
   return NextResponse.json(updated);
 }

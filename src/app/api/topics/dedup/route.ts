@@ -13,7 +13,11 @@ export async function GET() {
   }
 
   const allTopics = await db
-    .select({ id: topics.id, name: topics.name, slug: topics.slug, summary: topics.summary, status: topics.status, score: topics.score, embedding: topics.embedding })
+    .select({
+      id: topics.id, name: topics.name, slug: topics.slug, summary: topics.summary,
+      status: topics.status, score: topics.score, embedding: topics.embedding,
+      suggestedAngles: topics.suggestedAngles, signalCount: topics.signalCount, category: topics.category,
+    })
     .from(topics)
     .where(inArray(topics.status, ['active', 'regular', 'stale']));
 
@@ -39,7 +43,13 @@ export async function GET() {
   }
 
   // Find similar pairs
-  const pairs: { a: { id: string; name: string; slug: string; status: string; score: number }; b: { id: string; name: string; slug: string; status: string; score: number }; similarity: number }[] = [];
+  type TopicInfo = { id: string; name: string; slug: string; status: string; score: number; summary: string; suggestedAngles: string[]; signalCount: number; category: string };
+  const pairs: { a: TopicInfo; b: TopicInfo; similarity: number }[] = [];
+
+  const toInfo = (t: typeof allTopics[number]): TopicInfo => ({
+    id: t.id, name: t.name, slug: t.slug, status: t.status, score: t.score,
+    summary: t.summary, suggestedAngles: t.suggestedAngles, signalCount: t.signalCount, category: t.category,
+  });
 
   for (let i = 0; i < allTopics.length; i++) {
     for (let j = i + 1; j < allTopics.length; j++) {
@@ -49,11 +59,7 @@ export async function GET() {
 
       const sim = cosineSimilarity(embA, embB);
       if (sim > SIMILARITY_THRESHOLD) {
-        pairs.push({
-          a: { id: allTopics[i].id, name: allTopics[i].name, slug: allTopics[i].slug, status: allTopics[i].status, score: allTopics[i].score },
-          b: { id: allTopics[j].id, name: allTopics[j].name, slug: allTopics[j].slug, status: allTopics[j].status, score: allTopics[j].score },
-          similarity: Math.round(sim * 100) / 100,
-        });
+        pairs.push({ a: toInfo(allTopics[i]), b: toInfo(allTopics[j]), similarity: Math.round(sim * 100) / 100 });
       }
     }
   }

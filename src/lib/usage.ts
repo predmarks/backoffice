@@ -220,7 +220,7 @@ export async function getDailyChartData(days: number = 30): Promise<DailyOpCost[
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
   const rows = await db
     .select({
-      date: sql<string>`to_char(${llmUsage.createdAt}::date, 'YYYY-MM-DD')`,
+      date: sql<string>`to_char((${llmUsage.createdAt} AT TIME ZONE 'America/Argentina/Buenos_Aires')::date, 'YYYY-MM-DD')`,
       operation: llmUsage.operation,
       model: llmUsage.model,
       calls: sql<number>`count(*)::int`,
@@ -231,8 +231,8 @@ export async function getDailyChartData(days: number = 30): Promise<DailyOpCost[
     })
     .from(llmUsage)
     .where(gte(llmUsage.createdAt, since))
-    .groupBy(sql`${llmUsage.createdAt}::date`, llmUsage.operation, llmUsage.model)
-    .orderBy(asc(sql`${llmUsage.createdAt}::date`));
+    .groupBy(sql`(${llmUsage.createdAt} AT TIME ZONE 'America/Argentina/Buenos_Aires')::date`, llmUsage.operation, llmUsage.model)
+    .orderBy(asc(sql`(${llmUsage.createdAt} AT TIME ZONE 'America/Argentina/Buenos_Aires')::date`));
 
   // Aggregate across models per day+operation
   const map = new Map<string, DailyOpCost>();

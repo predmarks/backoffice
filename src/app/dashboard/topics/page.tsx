@@ -205,7 +205,12 @@ export default function TopicsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Temas</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">Temas</h1>
+          <Link href="/dashboard/topics/dedup" className="text-xs px-2 py-1 rounded-full border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100">
+            Revisar duplicados
+          </Link>
+        </div>
         {topics.length > 0 && (
           <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
             <input

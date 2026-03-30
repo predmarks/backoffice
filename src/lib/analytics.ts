@@ -78,9 +78,9 @@ export async function getMarketAnalytics(): Promise<AnalyticsData> {
     cat.marketCount++;
     catMap.set(m.category, cat);
 
-    // Time series
+    // Time series (use AR timezone for date grouping)
     if (m.publishedAt) {
-      const date = m.publishedAt.toISOString().split('T')[0];
+      const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).format(m.publishedAt);
       timePoints.push({ date, category: m.category, volume: vol, participants: parts });
     }
   }

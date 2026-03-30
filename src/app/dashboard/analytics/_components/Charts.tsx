@@ -41,7 +41,7 @@ function aggregateByWeek(points: MarketTimePoint[]) {
     rows: Array.from(weekMap.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([week, cats]) => ({
-        week: week.slice(5), // MM-DD
+        week: week.slice(8) + '/' + week.slice(5, 7), // DD/MM
         ...cats,
       })),
   };

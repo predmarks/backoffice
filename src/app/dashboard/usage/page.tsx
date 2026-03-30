@@ -334,7 +334,7 @@ function OperationLog({ entries, sortBy }: { entries: UsageLogEntry[]; sortBy: '
           {days.map(({ date, ops, totalCost }) => (
             <div key={date} id={`day-${date}`}>
               <div className="flex items-baseline justify-between mb-1.5 border-b border-gray-100 pb-1">
-                <h3 className="text-xs font-medium text-gray-700">{date}</h3>
+                <h3 className="text-xs font-medium text-gray-700">{date.split('-').reverse().join('/')}</h3>
                 <span className="text-xs font-mono text-gray-400">{ops.length} ops &middot; ${totalCost.toFixed(2)}</span>
               </div>
               <div className="space-y-0.5">

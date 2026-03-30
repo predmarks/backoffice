@@ -3,6 +3,8 @@ import { db } from '@/db/client';
 import { markets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { inngest } from '@/inngest/client';
+import { logMarketEvent } from '@/lib/market-events';
+import { logActivity } from '@/lib/activity-log';
 
 export async function POST(
   _request: NextRequest,
@@ -26,6 +28,14 @@ export async function POST(
     .update(markets)
     .set({ status: 'processing' })
     .where(eq(markets.id, id));
+
+  await logMarketEvent(id, 'status_changed', { detail: { from: 'candidate', to: 'processing' } });
+  await logActivity('review_started', {
+    entityType: 'market',
+    entityId: id,
+    entityLabel: market.title,
+    source: 'ui',
+  });
 
   await inngest.send({
     name: 'market/candidate.created',

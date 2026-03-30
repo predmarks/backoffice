@@ -47,7 +47,8 @@ function transformData(data: DailyOpCost[]): { rows: ChartRow[]; operations: str
 
   const rows: ChartRow[] = dates.map((date) => {
     const ops = byDate.get(date)!;
-    const row: ChartRow = { date: date.slice(5), fullDate: date };
+    const [, mm, dd] = date.split('-');
+    const row: ChartRow = { date: `${dd}/${mm}`, fullDate: date };
     for (const op of operations) {
       row[op] = Math.round((ops.get(op) ?? 0) * 1000) / 1000;
     }

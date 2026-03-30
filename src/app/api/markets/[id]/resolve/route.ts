@@ -4,6 +4,7 @@ import { markets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import type { Resolution } from '@/db/types';
 import { logActivity } from '@/lib/activity-log';
+import { logMarketEvent } from '@/lib/market-events';
 
 export async function POST(
   request: NextRequest,
@@ -58,6 +59,7 @@ export async function POST(
     .where(eq(markets.id, id))
     .returning();
 
+  await logMarketEvent(id, 'status_changed', { detail: { from: market.status, to: 'closed', outcome, confirmedBy: resolution.confirmedBy } });
   await logActivity('resolution_confirmed', {
     entityType: 'market',
     entityId: id,
