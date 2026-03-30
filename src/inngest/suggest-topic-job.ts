@@ -241,6 +241,7 @@ export const suggestTopicJob = inngest.createFunction(
 
             // Delete the placeholder since we merged into existing
             if (placeholderTopicId && placeholderTopicId !== existing.id) {
+              await db.delete(topicSignals).where(eq(topicSignals.topicId, placeholderTopicId));
               await db.delete(topicsTable).where(eq(topicsTable.id, placeholderTopicId));
             }
           }

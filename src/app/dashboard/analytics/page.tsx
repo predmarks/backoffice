@@ -1,12 +1,14 @@
 export const dynamic = 'force-dynamic';
 
 import { getMarketAnalytics, formatVolume } from '@/lib/analytics';
+import { getUserTimezone } from '@/lib/timezone';
 import { VolumeOverTimeChart, ParticipantTrendChart } from './_components/Charts';
 
 export default async function AnalyticsPage() {
+  const tz = await getUserTimezone();
   let data;
   try {
-    data = await getMarketAnalytics();
+    data = await getMarketAnalytics(tz);
   } catch {
     return (
       <div className="space-y-6">
@@ -31,7 +33,7 @@ export default async function AnalyticsPage() {
           <div className="text-xl font-mono font-bold text-gray-900">{formatVolume(totalVolume)}</div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="text-xs text-gray-400">Participantes</div>
+          <div className="text-xs text-gray-400">Participaciones</div>
           <div className="text-xl font-mono font-bold text-gray-900">{totalParticipants.toLocaleString()}</div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -79,7 +81,7 @@ export default async function AnalyticsPage() {
 
       {/* Participant trend */}
       <div className="bg-white rounded-lg border border-gray-200 p-5">
-        <h2 className="text-sm font-medium text-gray-500 mb-4">Participantes (acumulado)</h2>
+        <h2 className="text-sm font-medium text-gray-500 mb-4">Participaciones (acumulado)</h2>
         <ParticipantTrendChart data={overTime} />
       </div>
     </div>

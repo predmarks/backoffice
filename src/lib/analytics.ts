@@ -39,18 +39,18 @@ export interface AnalyticsData {
   overTime: MarketTimePoint[];
 }
 
-export async function getMarketAnalytics(): Promise<AnalyticsData> {
-  // All published markets (have been deployed onchain)
+export async function getMarketAnalytics(tz: string = 'America/Argentina/Buenos_Aires'): Promise<AnalyticsData> {
+  // All onchain markets (have onchainId from indexer sync)
   const publishedMarkets = await db
     .select({
       category: markets.category,
       volume: markets.volume,
       participants: markets.participants,
-      publishedAt: markets.publishedAt,
+      createdAt: markets.createdAt,
       status: markets.status,
     })
     .from(markets)
-    .where(isNotNull(markets.publishedAt));
+    .where(isNotNull(markets.onchainId));
 
   // Summary
   let totalVolume = 0;
@@ -78,11 +78,9 @@ export async function getMarketAnalytics(): Promise<AnalyticsData> {
     cat.marketCount++;
     catMap.set(m.category, cat);
 
-    // Time series (use AR timezone for date grouping)
-    if (m.publishedAt) {
-      const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).format(m.publishedAt);
-      timePoints.push({ date, category: m.category, volume: vol, participants: parts });
-    }
+    // Time series
+    const date = new Intl.DateTimeFormat('sv-SE', { timeZone: tz }).format(m.createdAt);
+    timePoints.push({ date, category: m.category, volume: vol, participants: parts });
   }
 
   const byCategory = Array.from(catMap.values()).sort((a, b) => b.volume - a.volume);

@@ -18,6 +18,7 @@ function buildFeedback(
   scoring: { scores: ReviewResult['scores']; recommendation: string },
   rulesCheck: { hardRuleResults: ReviewResult['hardRuleResults']; softRuleResults: ReviewResult['softRuleResults'] },
   verification: { claims: ReviewResult['dataVerification'] },
+  previousFeedback?: string,
 ): string {
   const lines: string[] = [];
 
@@ -45,6 +46,14 @@ function buildFeedback(
     if (!claim.isAccurate) {
       lines.push(`Dato inexacto: "${claim.claim}" (valor actual: ${claim.currentValue}, fuente: ${claim.source})`);
     }
+  }
+
+  // Tag items that appeared in the previous iteration's feedback as unfixed
+  if (previousFeedback) {
+    const prevLines = new Set(
+      previousFeedback.split('\n').filter(Boolean).map((l) => l.replace(/^\[NO CORREGIDO\] /, '')),
+    );
+    return lines.map((line) => prevLines.has(line) ? `[NO CORREGIDO] ${line}` : line).join('\n');
   }
 
   return lines.join('\n');
@@ -266,7 +275,8 @@ export const reviewJob = inngest.createFunction(
         reviewedAt: new Date().toISOString(),
       };
 
-      const feedback = buildFeedback(scoring, rulesCheck, verification);
+      const previousFeedback = iterations.length > 0 ? iterations[iterations.length - 1].feedback : undefined;
+      const feedback = buildFeedback(scoring, rulesCheck, verification, previousFeedback);
 
       // Save iteration
       const iteration: Iteration = {

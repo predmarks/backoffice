@@ -30,6 +30,9 @@ export default async function RootLayout({
 
   return (
     <html lang="es">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `if(!document.cookie.includes('tz='))document.cookie='tz='+Intl.DateTimeFormat().resolvedOptions().timeZone+';path=/;max-age=31536000'` }} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased bg-gray-50 text-gray-900`}
       >

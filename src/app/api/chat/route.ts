@@ -9,6 +9,7 @@ import { slugify } from '@/agents/sourcer/types';
 import { inngest } from '@/inngest/client';
 import { logActivity } from '@/lib/activity-log';
 import { logUsage } from '@/lib/llm';
+import { getUserTimezone } from '@/lib/timezone';
 import { loadGenerationPrompt, saveGenerationPrompt } from '@/agents/sourcer/generator';
 import { loadResolutionPrompt, saveResolutionPrompt } from '@/agents/resolver/evaluator';
 import { syncDeployedMarkets } from '@/lib/sync-deployed';
@@ -46,17 +47,29 @@ const DEFAULT_CHAT_PROMPT = `Sos el copiloto de Predmarks, una plataforma argent
 
 PERSONALIDAD:
 - Hablás en español argentino, breve y directo. Nada de listas de capacidades ni explicaciones de qué podés hacer.
-- Cuando el usuario pide algo, HACELO directamente usando las herramientas. No pidas confirmación salvo que sea destructivo.
 - Si te preguntan qué podés hacer, respondé algo como "Puedo consultar, editar y analizar todo lo que ves en la plataforma. Preguntame lo que necesites."
 - NUNCA listes tus herramientas ni hagas bullet points de capacidades. Sos un colega, no un manual.
 
-COMPORTAMIENTO:
-- Usá las herramientas proactivamente. Si el usuario menciona un tema o mercado, buscalo directamente.
+OPERACIONES BARATAS (ejecutar sin pedir confirmación):
+- Consultas (lookup_topic, lookup_market, lookup_signals): usá proactivamente cuando el usuario menciona un tema o mercado.
+- Modificaciones directas (update_topic, update_market, save_feedback, link_signal_to_topic, add_angle): ejecutá inmediatamente.
 - Para feedback: guardalo con save_feedback. Si tiene valor general, extraé aprendizajes globales.
+
+OPERACIONES COSTOSAS (sugerir pero SIEMPRE pedir confirmación):
+- generate_markets, review_market, ingest_signals, research_topic, check_resolution, sync_deployed
+- Sugerí estas acciones proactivamente cuando sea relevante, pero SIEMPRE preguntá "¿Querés que lance X?" antes de ejecutar.
+- NUNCA ejecutes estas herramientas sin confirmación explícita del usuario.
+
+ÁNGULOS DE MERCADO:
+- Cuando discutas ideas o ángulos de mercado para un tema, guardá cada ángulo automáticamente usando add_angle. No esperes a que el usuario lo pida.
+- Guardar un ángulo NO crea un mercado. Es solo una idea guardada para referencia futura.
+- Los ángulos son preguntas concretas para mercados predictivos (binarios sí/no o multi-opción).
+- Discutir ángulos es brainstorming libre. Crear mercados (generate_markets) es un paso separado que requiere confirmación.
+
+COMPORTAMIENTO GENERAL:
 - Respuestas cortas. Si la acción se completó, confirmá en una oración.
-- Tenés acceso a todos los temas, mercados, señales, reglas. Podés consultar, modificar, fusionar, investigar, generar mercados y lanzar pipelines.
-- Cuando el usuario pida un mercado específico (ej: "creame un mercado sobre X"), usá el parámetro \`instruction\` de generate_markets para pasar el pedido concreto al generador.
-- Cuando el usuario quiera modificar cómo se generan los mercados (formato, criterios de resolución, descripciones, etc.), guardalo como global_learnings con save_feedback.`;
+- Tenés acceso a todos los temas, mercados, señales, reglas.
+- Cuando el usuario quiera modificar cómo se generan los mercados, guardalo como global_learnings con save_feedback.`;
 
 async function buildTopicContext(topicId: string): Promise<string> {
   const [topic] = await db.select().from(topics).where(eq(topics.id, topicId));
@@ -89,7 +102,7 @@ FEEDBACK PREVIO:
 ${feedbackEntries.length > 0 ? feedbackEntries.map((f) => `- ${f.text}`).join('\n') : 'Sin feedback.'}`;
 }
 
-async function buildMarketContext(marketId: string): Promise<string> {
+async function buildMarketContext(marketId: string, tz: string = 'America/Argentina/Buenos_Aires'): Promise<string> {
   const [market] = await db.select().from(markets).where(eq(markets.id, marketId));
   if (!market) return 'Mercado no encontrado.';
 
@@ -120,7 +133,9 @@ async function buildMarketContext(marketId: string): Promise<string> {
 - Descripción: ${market.description}
 - Criterios de resolución: ${market.resolutionCriteria}
 - Fuente de resolución: ${market.resolutionSource}
-- Contingencias: ${market.contingencies}${signalsContext}`;
+- Contingencias: ${market.contingencies}
+- Cierre: ${new Date(market.endTimestamp * 1000).toLocaleString('es-AR', { timeZone: tz })} (timestamp: ${market.endTimestamp})
+- Fecha resolución esperada: ${market.expectedResolutionDate ?? 'no definida'}${signalsContext}`;
 }
 
 async function buildSignalContext(signalId: string): Promise<string> {
@@ -232,6 +247,18 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'add_angle',
+    description: 'Save a new market angle/question to a topic. Use this automatically when discussing potential market ideas for a topic. Saving an angle does NOT create a market.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        topicId: { type: 'string' as const, description: 'ID del tema' },
+        angle: { type: 'string' as const, description: 'Pregunta concreta para mercado predictivo (binario o multi-opción)' },
+      },
+      required: ['topicId', 'angle'],
+    },
+  },
+  {
     name: 'update_market',
     description: 'Modify a market\'s properties',
     input_schema: {
@@ -246,6 +273,8 @@ const TOOLS: Anthropic.Tool[] = [
         category: { type: 'string' as const },
         tags: { type: 'array' as const, items: { type: 'string' as const } },
         outcomes: { type: 'array' as const, items: { type: 'string' as const } },
+        endTimestamp: { type: 'number' as const, description: 'Unix timestamp en segundos para el cierre del mercado' },
+        expectedResolutionDate: { type: 'string' as const, description: 'Fecha esperada de resolución YYYY-MM-DD' },
         status: { type: 'string' as const },
       },
       required: ['marketId'],
@@ -468,7 +497,7 @@ const TOOLS: Anthropic.Tool[] = [
 // --- Tool execution ---
 // Returns tool_result content string for multi-turn
 
-async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextType, contextId: string | null): Promise<string> {
+async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextType, contextId: string | null, tz: string = 'America/Argentina/Buenos_Aires'): Promise<string> {
   // Lookup tools — return data for Claude to use
   if (block.name === 'lookup_topic') {
     const { topicId } = block.input as { topicId: string };
@@ -477,7 +506,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
 
   if (block.name === 'lookup_market') {
     const { marketId } = block.input as { marketId: string };
-    return await buildMarketContext(marketId);
+    return await buildMarketContext(marketId, tz);
   }
 
   if (block.name === 'lookup_signals') {
@@ -562,6 +591,17 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     const [updatedT] = await db.select({ slug: topics.slug, name: topics.name }).from(topics).where(eq(topics.id, topicId as string));
     await logActivity('topic_updated', { entityType: 'topic', entityId: topicId as string, entityLabel: updatedT?.name ?? (fields.name as string), detail: { ...fields as Record<string, unknown>, topicSlug: updatedT?.slug }, source: 'chat' });
     return 'Tema actualizado.';
+  }
+
+  if (block.name === 'add_angle') {
+    const { topicId, angle } = block.input as { topicId: string; angle: string };
+    const [topic] = await db.select({ suggestedAngles: topics.suggestedAngles, name: topics.name, slug: topics.slug }).from(topics).where(eq(topics.id, topicId));
+    if (!topic) return 'Tema no encontrado.';
+    const existing = topic.suggestedAngles ?? [];
+    if (existing.includes(angle)) return 'Ángulo ya existe.';
+    const updated = [...existing, angle];
+    await db.update(topics).set({ suggestedAngles: updated, updatedAt: new Date() }).where(eq(topics.id, topicId));
+    return `Ángulo guardado: "${angle}"`;
   }
 
   if (block.name === 'update_market') {
@@ -911,11 +951,12 @@ export async function POST(request: NextRequest) {
   try {
 
   // Build context
+  const tz = await getUserTimezone();
   let entityContext = '';
   if (contextType === 'topic' && contextId) {
     entityContext = await buildTopicContext(contextId);
   } else if (contextType === 'market' && contextId) {
-    entityContext = await buildMarketContext(contextId);
+    entityContext = await buildMarketContext(contextId, tz);
   } else if (contextType === 'signal' && contextId) {
     entityContext = await buildSignalContext(contextId);
   }
@@ -974,7 +1015,7 @@ export async function POST(request: NextRequest) {
       for (const block of toolUseBlocks) {
         let result: string;
         try {
-          result = await executeTool(block, contextType, contextId);
+          result = await executeTool(block, contextType, contextId, tz);
         } catch (err) {
           console.error(`[chat] tool ${block.name} failed:`, err);
           result = `Error ejecutando ${block.name}: ${err instanceof Error ? err.message : String(err)}`;
@@ -991,7 +1032,7 @@ export async function POST(request: NextRequest) {
     // Execute any remaining tool calls (side effects on end_turn)
     for (const block of toolUseBlocks) {
       try {
-        await executeTool(block, contextType, contextId);
+        await executeTool(block, contextType, contextId, tz);
       } catch (err) {
         console.error(`[chat] end-turn tool ${block.name} failed:`, err);
       }

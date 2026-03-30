@@ -47,7 +47,6 @@ function detectContext(pathname: string): ChatContext {
 function formatTime(iso: string): string {
   return new Intl.DateTimeFormat('es-AR', {
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-    timeZone: 'America/Argentina/Buenos_Aires',
   }).format(new Date(iso));
 }
 

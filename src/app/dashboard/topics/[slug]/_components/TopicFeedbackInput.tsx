@@ -79,7 +79,7 @@ export function TopicFeedbackInput({
               <div>
                 <p>{entry.text}</p>
                 <span className="text-[10px] text-gray-400">
-                  {new Date(entry.createdAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
+                  {new Date(entry.createdAt).toLocaleString('es-AR')}
                 </span>
               </div>
             </li>

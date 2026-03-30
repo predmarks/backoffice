@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { getUsageData, getDailyChartData, getUsageLog, formatTokens, type OperationUsage, type DailyOpCost, type UsageLogEntry } from '@/lib/usage';
 import { TOKEN_BUDGETS } from '@/lib/llm';
+import { getUserTimezone } from '@/lib/timezone';
 import Link from 'next/link';
 import DailyChart from './_components/DailyChart';
 
@@ -25,12 +26,12 @@ function buildInngestUrl(compositeRunId: string): string {
   const slashIdx = compositeRunId.indexOf('/');
   if (slashIdx === -1) {
     // No slash — treat entire string as runId
-    if (process.env.NODE_ENV !== 'production') return `http://localhost:8288/runs/${compositeRunId}`;
+    if (process.env.NODE_ENV !== 'production') return `http://localhost:8288/run?runID=${compositeRunId}`;
     return `https://app.inngest.com/env/production/runs/${compositeRunId}`;
   }
   const functionId = compositeRunId.slice(0, slashIdx);
   const runId = compositeRunId.slice(slashIdx + 1);
-  if (process.env.NODE_ENV !== 'production') return `http://localhost:8288/runs/${runId}`;
+  if (process.env.NODE_ENV !== 'production') return `http://localhost:8288/run?runID=${runId}`;
   return `https://app.inngest.com/env/production/functions/${functionId}/logs/${runId}`;
 }
 
@@ -77,6 +78,7 @@ function aggregateAvgOutput(ops: OperationUsage[]) {
 
 export default async function UsagePage({ searchParams }: { searchParams: Promise<{ sort?: string }> }) {
   const params = await searchParams;
+  const tz = await getUserTimezone();
   const sortBy = params.sort === 'cost' ? 'cost' : 'date';
 
   let data;
@@ -273,7 +275,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
       <DailyChart data={dailyChart} />
 
       {/* Section 6: Operation Log */}
-      <OperationLog entries={usageLog} sortBy={sortBy} />
+      <OperationLog entries={usageLog} sortBy={sortBy} tz={tz} />
     </div>
   );
 }
@@ -281,12 +283,11 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
 
 // --- Operation Log ---
 
-const TZ = 'America/Argentina/Buenos_Aires';
-const dateFmt = new Intl.DateTimeFormat('sv-SE', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }); // YYYY-MM-DD
-const timeFmt = new Intl.DateTimeFormat('es-AR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+function OperationLog({ entries, sortBy, tz }: { entries: UsageLogEntry[]; sortBy: 'date' | 'cost'; tz: string }) {
+  const dateFmt = new Intl.DateTimeFormat('sv-SE', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }); // YYYY-MM-DD
+  const timeFmt = new Intl.DateTimeFormat('es-AR', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
 
-function OperationLog({ entries, sortBy }: { entries: UsageLogEntry[]; sortBy: 'date' | 'cost' }) {
-  // Group by day (AR timezone)
+  // Group by day
   const byDay = new Map<string, UsageLogEntry[]>();
   for (const e of entries) {
     const day = dateFmt.format(e.createdAt);

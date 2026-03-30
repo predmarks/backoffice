@@ -113,7 +113,7 @@ export function ParticipantTrendChart({ data }: { data: MarketTimePoint[] }) {
         <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={40} />
         <Tooltip
           contentStyle={{ fontSize: '11px', borderRadius: '8px', border: '1px solid #e5e7eb' }}
-          formatter={(value: unknown) => [Number(value), 'Participantes']}
+          formatter={(value: unknown) => [Number(value), 'Participaciones']}
         />
         <Line type="monotone" dataKey="participants" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
       </LineChart>

@@ -17,6 +17,7 @@ import { ActivityCard } from '@/app/_components/ActivityCard';
 import { CitedText } from '@/app/_components/CitedText';
 import { EditableField } from '@/app/_components/EditableField';
 import { ResolutionConfirmButton, ResolutionFeedbackButton } from './_components/ResolutionActions';
+import { getUserTimezone } from '@/lib/timezone';
 
 function formatVolume(vol: string): string {
   const n = parseFloat(vol) / 1e6;
@@ -26,11 +27,11 @@ function formatVolume(vol: string): string {
   return n.toFixed(0);
 }
 
-function formatTimestamp(ts: number): string {
+function formatTimestamp(ts: number, tz: string): string {
   return new Intl.DateTimeFormat('es-AR', {
     dateStyle: 'full',
     timeStyle: 'short',
-    timeZone: 'America/Argentina/Buenos_Aires',
+    timeZone: tz,
   }).format(new Date(ts * 1000));
 }
 
@@ -47,6 +48,7 @@ interface Props {
 
 export default async function MarketDetailPage({ params }: Props) {
   const { id } = await params;
+  const tz = await getUserTimezone();
   const [[market], events, activity] = await Promise.all([
     db.select().from(markets).where(eq(markets.id, id)),
     db.select().from(marketEvents).where(eq(marketEvents.marketId, id)).orderBy(asc(marketEvents.createdAt)),
@@ -130,7 +132,7 @@ export default async function MarketDetailPage({ params }: Props) {
                 <span className="text-[10px] text-gray-400">
                   {new Intl.DateTimeFormat('es-AR', {
                     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-                    timeZone: 'America/Argentina/Buenos_Aires',
+                    timeZone: tz,
                   }).format(new Date(resolution.flaggedAt))}
                 </span>
               )}
@@ -195,7 +197,7 @@ export default async function MarketDetailPage({ params }: Props) {
               <span className="text-xs text-gray-400">
                 {new Intl.DateTimeFormat('es-AR', {
                   day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-                  timeZone: 'America/Argentina/Buenos_Aires',
+                  timeZone: tz,
                 }).format(new Date(resolution.confirmedAt))}
               </span>
             )}
@@ -330,10 +332,10 @@ export default async function MarketDetailPage({ params }: Props) {
                   value={new Date(market.endTimestamp * 1000).toISOString().slice(0, 16)}
                   type="datetime"
                   className="text-gray-700"
-                  displayValue={formatTimestamp(market.endTimestamp)}
+                  displayValue={formatTimestamp(market.endTimestamp, tz)}
                 />
               ) : (
-                <p className="text-gray-700">{formatTimestamp(market.endTimestamp)}</p>
+                <p className="text-gray-700">{formatTimestamp(market.endTimestamp, tz)}</p>
               )}
             </Section>
 
@@ -451,7 +453,7 @@ export default async function MarketDetailPage({ params }: Props) {
                   <span className="absolute -left-[5px] top-2.5 w-2 h-2 rounded-full bg-gray-400" />
                   <div className="flex items-baseline gap-2">
                     <span className="text-xs text-gray-400 shrink-0 font-mono">
-                      {formatEventTime(event.createdAt)}
+                      {formatEventTime(event.createdAt, tz)}
                     </span>
                     <span className="text-sm text-gray-700">
                       {formatEvent(event.type as MarketEventType, event.iteration, event.detail as Record<string, unknown> | null)}
@@ -589,7 +591,7 @@ export default async function MarketDetailPage({ params }: Props) {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-gray-400">{s.source}</span>
-                        <span className="text-[10px] text-gray-300">{formatEventTime(s.publishedAt)}</span>
+                        <span className="text-[10px] text-gray-300">{formatEventTime(s.publishedAt, tz)}</span>
                       </div>
                       <p className="text-sm text-gray-800 mt-0.5">
                         {s.url ? <a href={s.url} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 hover:underline">{s.text}</a> : s.text}
@@ -609,13 +611,13 @@ export default async function MarketDetailPage({ params }: Props) {
   );
 }
 
-function formatEventTime(date: Date): string {
+function formatEventTime(date: Date, tz: string): string {
   return new Intl.DateTimeFormat('es-AR', {
     hour: '2-digit',
     minute: '2-digit',
     day: '2-digit',
     month: '2-digit',
-    timeZone: 'America/Argentina/Buenos_Aires',
+    timeZone: tz,
   }).format(date);
 }
 

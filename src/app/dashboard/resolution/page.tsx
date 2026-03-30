@@ -6,19 +6,21 @@ import { markets } from '@/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import type { MarketStatus, TimingSafety, Resolution } from '@/db/types';
 import { StatusBadge } from '../_components/StatusBadge';
+import { getUserTimezone } from '@/lib/timezone';
 
-function formatTimestamp(ts: number): string {
+function formatTimestamp(ts: number, tz: string): string {
   return new Intl.DateTimeFormat('es-AR', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-    timeZone: 'America/Argentina/Buenos_Aires',
+    timeZone: tz,
   }).format(new Date(ts * 1000));
 }
 
 export default async function ResolutionPage() {
+  const tz = await getUserTimezone();
   const results = await db
     .select()
     .from(markets)
@@ -62,7 +64,7 @@ export default async function ResolutionPage() {
                     </div>
                   </div>
                   <div className="text-right text-xs text-gray-500 shrink-0">
-                    <div>Cerró: {formatTimestamp(market.endTimestamp)}</div>
+                    <div>Cerró: {formatTimestamp(market.endTimestamp, tz)}</div>
                   </div>
                 </div>
               </Link>

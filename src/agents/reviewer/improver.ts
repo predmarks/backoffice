@@ -9,6 +9,8 @@ Tu trabajo es mejorar mercados que fallaron la revisión automática, corrigiend
 REGLAS:
 - NUNCA inventar datos. Si necesitás un número que no tenés, escribí "[VERIFICAR: descripción del dato necesario]".
 - Corregí SOLAMENTE los problemas señalados en el feedback. No cambies lo que estaba bien.
+- Items marcados [NO CORREGIDO] son problemas que NO se resolvieron en la iteración anterior.
+  Intentá una solución DIFERENTE — el enfoque previo no funcionó. Reestructurá, reenmarcá o cambiá la estrategia.
 - Devolvé el mercado completo con todas las mejoras aplicadas.
 - Todo el contenido en español argentino.`;
 

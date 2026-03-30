@@ -7,15 +7,16 @@ import { eq, and, inArray, asc } from 'drizzle-orm';
 import type { MarketStatus, TimingSafety } from '@/db/types';
 import { StatusBadge } from '../_components/StatusBadge';
 import { TimingSafetyIndicator } from '../_components/TimingSafetyIndicator';
+import { getUserTimezone } from '@/lib/timezone';
 
-function formatTimestamp(ts: number): string {
+function formatTimestamp(ts: number, tz: string): string {
   return new Intl.DateTimeFormat('es-AR', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-    timeZone: 'America/Argentina/Buenos_Aires',
+    timeZone: tz,
   }).format(new Date(ts * 1000));
 }
 
@@ -30,6 +31,7 @@ function timeRemaining(ts: number): { text: string; urgent: boolean } {
 }
 
 export default async function OpenMarketsPage() {
+  const tz = await getUserTimezone();
   const results = await db
     .select()
     .from(markets)
@@ -75,7 +77,7 @@ export default async function OpenMarketsPage() {
                   </div>
                   <div className="text-right text-xs shrink-0">
                     <div className="text-gray-500">
-                      Cierre: {formatTimestamp(market.endTimestamp)}
+                      Cierre: {formatTimestamp(market.endTimestamp, tz)}
                     </div>
                     <div className={remaining.urgent ? 'text-red-600 font-medium' : 'text-gray-500'}>
                       {remaining.text}

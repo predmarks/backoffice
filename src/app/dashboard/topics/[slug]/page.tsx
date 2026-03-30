@@ -3,10 +3,11 @@ export const dynamic = 'force-dynamic';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { db } from '@/db/client';
-import { topics, topicSignals, signals, activityLog } from '@/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { topics, topicSignals, signals, activityLog, markets } from '@/db/schema';
+import { eq, desc, sql } from 'drizzle-orm';
 import { TopicActions } from './_components/TopicActions';
 import { ActivityCard } from '@/app/_components/ActivityCard';
+import { getUserTimezone } from '@/lib/timezone';
 
 const TYPE_BADGE: Record<string, { label: string; className: string }> = {
   news: { label: 'Noticia', className: 'bg-blue-100 text-blue-700' },
@@ -15,13 +16,13 @@ const TYPE_BADGE: Record<string, { label: string; className: string }> = {
   event: { label: 'Evento', className: 'bg-green-100 text-green-700' },
 };
 
-function formatDate(date: Date): string {
+function formatDate(date: Date, tz: string): string {
   return new Intl.DateTimeFormat('es-AR', {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-    timeZone: 'America/Argentina/Buenos_Aires',
+    timeZone: tz,
   }).format(date);
 }
 
@@ -30,6 +31,7 @@ interface Props {
 }
 
 export default async function TopicDetailPage({ params }: Props) {
+  const tz = await getUserTimezone();
   const { slug } = await params;
 
   const [topic] = await db
@@ -55,6 +57,13 @@ export default async function TopicDetailPage({ params }: Props) {
     .innerJoin(signals, eq(topicSignals.signalId, signals.id))
     .where(eq(topicSignals.topicId, topic.id))
     .orderBy(desc(signals.publishedAt));
+
+  // Related markets (linked via sourceContext.topicIds)
+  const relatedMarkets = await db
+    .select({ id: markets.id, title: markets.title, status: markets.status, category: markets.category })
+    .from(markets)
+    .where(sql`${markets.sourceContext}->'topicIds' @> ${JSON.stringify([topic.id])}::jsonb`)
+    .orderBy(desc(markets.createdAt));
 
   const scoreColor = topic.score >= 7 ? 'bg-green-100 text-green-700' :
     topic.score >= 4 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-500';
@@ -120,6 +129,33 @@ export default async function TopicDetailPage({ params }: Props) {
           </div>
         )}
 
+        {/* Related markets */}
+        {relatedMarkets.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-5 mb-6">
+            <h2 className="text-sm font-medium text-gray-500 mb-2">Mercados ({relatedMarkets.length})</h2>
+            <div className="space-y-1.5">
+              {relatedMarkets.map((m) => {
+                const statusBadge =
+                  m.status === 'open' ? 'bg-indigo-100 text-indigo-700' :
+                  m.status === 'closed' ? 'bg-green-100 text-green-700' :
+                  m.status === 'candidate' ? 'bg-purple-100 text-purple-700' :
+                  m.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                  'bg-gray-100 text-gray-600';
+                return (
+                  <div key={m.id} className="flex items-center gap-2">
+                    <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${statusBadge}`}>
+                      {m.status}
+                    </span>
+                    <Link href={`/dashboard/markets/${m.id}`} className="text-sm text-blue-600 hover:underline truncate">
+                      {m.title}
+                    </Link>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Feedback history */}
         {feedbackEntries.length > 0 && (
           <div className="bg-white rounded-lg border border-gray-200 p-5 mb-6">
@@ -130,7 +166,7 @@ export default async function TopicDetailPage({ params }: Props) {
                   <span className="text-gray-400 text-xs mr-2">
                     {new Intl.DateTimeFormat('es-AR', {
                       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-                      timeZone: 'America/Argentina/Buenos_Aires',
+                      timeZone: tz,
                     }).format(new Date(f.createdAt))}
                   </span>
                   {f.text}
@@ -176,7 +212,7 @@ export default async function TopicDetailPage({ params }: Props) {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-400">{s.source}</span>
-                          <span className="text-[10px] text-gray-300">{formatDate(s.publishedAt)}</span>
+                          <span className="text-[10px] text-gray-300">{formatDate(s.publishedAt, tz)}</span>
                         </div>
                         <p className="text-sm text-gray-800 mt-0.5">
                           {s.url ? (
