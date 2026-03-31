@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { markets, marketEvents } from '@/db/schema';
-import { eq, and, desc, sql, inArray } from 'drizzle-orm';
+import { eq, and, or, desc, sql, inArray } from 'drizzle-orm';
 import type { Iteration, Review, Resolution } from '@/db/types';
 import { validateChainId } from '@/lib/chains';
 
@@ -32,7 +32,10 @@ export async function GET(request: NextRequest) {
   const filterStatus = request.nextUrl.searchParams.get('status');
   const chainId = validateChainId(Number(request.nextUrl.searchParams.get('chain')) || undefined);
 
-  const chainFilter = and(eq(markets.isArchived, false), eq(markets.chainId, chainId));
+  const chainFilter = and(
+    eq(markets.isArchived, false),
+    or(eq(markets.chainId, chainId), eq(markets.status, 'candidate')),
+  );
 
   // Always get counts (excluding archived)
   const countRows = await db

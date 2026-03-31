@@ -62,8 +62,30 @@ export const resolutionJob = inngest.createFunction(
       return { status: 'skipped', reason: `status: ${market?.status ?? 'not found'}` };
     }
 
+    // Testnet: random resolution instead of LLM evaluation
     if (market.chainId !== 8453) {
-      return { status: 'skipped', reason: 'testnet market' };
+      const outcomes = (market.outcomes as string[]) ?? ['Si', 'No'];
+      const randomOutcome = outcomes[Math.floor(Math.random() * outcomes.length)];
+
+      await step.run('save-random-resolution', async () => {
+        const resolution: Resolution = {
+          evidence: `Resolución de prueba (testnet). Resultado aleatorio: ${randomOutcome}.`,
+          evidenceUrls: [],
+          confidence: 'high',
+          suggestedOutcome: randomOutcome,
+          flaggedAt: new Date().toISOString(),
+        };
+        await db.update(markets).set({ resolution }).where(eq(markets.id, marketId));
+        await logActivity('resolution_flagged', {
+          entityType: 'market',
+          entityId: marketId,
+          entityLabel: market.title,
+          detail: { status: 'resolved', suggestedOutcome: randomOutcome, confidence: 'high', testnet: true },
+          source: 'pipeline',
+        });
+      });
+
+      return { status: 'resolved', marketId, testnet: true, suggestedOutcome: randomOutcome };
     }
 
     // Fetch resolution source content and save as signal

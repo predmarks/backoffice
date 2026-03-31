@@ -24,6 +24,13 @@ export const PRECOG_MASTER_ABI = [
     outputs: [{ name: '', type: 'bytes32' }],
   },
   {
+    name: 'MARKET_CREATOR_ROLE',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'bytes32' }],
+  },
+  {
     name: 'hasRole',
     type: 'function',
     stateMutability: 'view',
@@ -50,6 +57,72 @@ export const PRECOG_MASTER_ABI = [
       { name: 'marketOracle', type: 'address' },
     ],
     outputs: [],
+  },
+  {
+    name: 'createCustomMarket',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'name', type: 'string' },
+      { name: 'description', type: 'string' },
+      { name: 'category', type: 'string' },
+      { name: 'outcomes', type: 'string[]' },
+      { name: 'startTimestamp', type: 'uint256' },
+      { name: 'endTimestamp', type: 'uint256' },
+      { name: 'marketCreator', type: 'address' },
+      { name: 'funding', type: 'uint256' },
+      { name: 'overround', type: 'uint256' },
+      { name: 'collateralToken', type: 'address' },
+      { name: 'creatorAddress', type: 'address' },
+      { name: 'marketOracle', type: 'address' },
+    ],
+    outputs: [],
+  },
+  // Events
+  {
+    name: 'MarketCreated',
+    type: 'event',
+    inputs: [
+      { name: 'marketId', type: 'uint256', indexed: true },
+      { name: 'market', type: 'address', indexed: false },
+    ],
+  },
+] as const;
+
+export const ERC20_ABI = [
+  {
+    name: 'approve',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+  {
+    name: 'allowance',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'balanceOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'decimals',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint8' }],
   },
 ] as const;
 
@@ -105,4 +178,14 @@ export const MASTER_ADDRESSES: Record<number, `0x${string}`> = {
     '0x2297b780508cf997aaff9ad28254006e131599e5') as `0x${string}`,
   84532: (process.env.NEXT_PUBLIC_MASTER_ADDRESS_SEPOLIA ??
     '0x0000000000000000000000000000000000000000') as `0x${string}`,
+};
+
+export const COLLATERAL_TOKENS: Record<number, `0x${string}` | null> = {
+  8453: (process.env.NEXT_PUBLIC_COLLATERAL_TOKEN_BASE ?? null) as `0x${string}` | null,
+  84532: (process.env.NEXT_PUBLIC_COLLATERAL_TOKEN_SEPOLIA ?? null) as `0x${string}` | null,
+};
+
+export const ORACLE_ADDRESSES: Record<number, `0x${string}` | null> = {
+  8453: (process.env.NEXT_PUBLIC_ORACLE_ADDRESS_BASE ?? null) as `0x${string}` | null,
+  84532: (process.env.NEXT_PUBLIC_ORACLE_ADDRESS_SEPOLIA ?? null) as `0x${string}` | null,
 };

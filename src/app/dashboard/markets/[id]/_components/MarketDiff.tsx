@@ -189,6 +189,17 @@ export function MarketDiff(props: Props) {
   const { writeContract, data: hash, isPending, error } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
   const [showPreview, setShowPreview] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+
+  async function handleDiscard() {
+    setDiscarding(true);
+    try {
+      await fetch(`/api/markets/${props.marketId}/refresh?full=true`, { method: 'POST' });
+      window.location.reload();
+    } catch {
+      setDiscarding(false);
+    }
+  }
 
   useEffect(() => {
     if (!isSuccess) return;
@@ -244,6 +255,13 @@ export function MarketDiff(props: Props) {
           <span className="text-[10px] text-amber-500">{diffs.length} diferencia{diffs.length !== 1 ? 's' : ''}</span>
         </div>
         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={handleDiscard}
+            disabled={discarding || isPending || isConfirming}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 cursor-pointer"
+          >
+            {discarding ? 'Descartando...' : 'Descartar'}
+          </button>
           <button
             onClick={() => isPending || isConfirming ? undefined : showPreview ? handleUpdate() : setShowPreview(true)}
             disabled={isPending || isConfirming}

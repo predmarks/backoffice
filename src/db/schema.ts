@@ -34,7 +34,7 @@ export const markets = pgTable(
     publishedAt: timestamp('published_at'),
     closedAt: timestamp('closed_at'),
     resolvedAt: timestamp('resolved_at'),
-    outcome: varchar('outcome', { length: 5 }),
+    outcome: varchar('outcome', { length: 200 }),
     sourceContext: jsonb('source_context').notNull().$type<SourceContext>(),
     review: jsonb('review').$type<Review>(),
     iterations: jsonb('iterations').$type<Iteration[]>(),

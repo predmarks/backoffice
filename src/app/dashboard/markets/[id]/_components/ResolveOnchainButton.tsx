@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAccount, useChainId, useWalletClient, usePublicClient } from 'wagmi';
+import { encodeFunctionData } from 'viem';
+import { useAccount, usePublicClient } from 'wagmi';
 import { PRECOG_MARKET_ABI, REPORTER_ABI, REPORTER_ADDRESSES } from '@/lib/contracts';
 import { getBasescanUrl } from '@/lib/chains';
 
@@ -12,6 +13,7 @@ interface Props {
   outcome: string;
   outcomes: string[];
   marketAddress: `0x${string}`;
+  chainId: number;
   reportOnly?: boolean;
 }
 
@@ -40,11 +42,19 @@ function Param({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function ResolveOnchainButton({ marketId, onchainId, outcome, outcomes, marketAddress, reportOnly }: Props) {
+async function sendTx(to: `0x${string}`, data: `0x${string}`, from: `0x${string}`): Promise<`0x${string}`> {
+  const ethereum = (window as unknown as { ethereum?: { request: (args: { method: string; params: unknown[] }) => Promise<string> } }).ethereum;
+  if (!ethereum) throw new Error('No wallet found');
+  const hash = await ethereum.request({
+    method: 'eth_sendTransaction',
+    params: [{ from, to, data }],
+  });
+  return hash as `0x${string}`;
+}
+
+export function ResolveOnchainButton({ marketId, onchainId, outcome, outcomes, marketAddress, chainId, reportOnly }: Props) {
   const router = useRouter();
-  const { isConnected } = useAccount();
-  const chainId = useChainId();
-  const { data: walletClient } = useWalletClient();
+  const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const [step, setStep] = useState<Step>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -66,18 +76,18 @@ export function ResolveOnchainButton({ marketId, onchainId, outcome, outcomes, m
     });
 
   async function handleResolve() {
-    if (!walletClient || !publicClient) return;
+    if (!address || !publicClient) return;
     setError(null);
     setTxHash(null);
 
     try {
       setStep('resolving');
-      const resolveTx = await walletClient.writeContract({
-        address: marketAddress,
+      const resolveData = encodeFunctionData({
         abi: PRECOG_MARKET_ABI,
         functionName: 'reportResult',
         args: [BigInt(onchainId), BigInt(outcomeIndex)],
       });
+      const resolveTx = await sendTx(marketAddress, resolveData, address);
       setTxHash(resolveTx);
       setStep('confirming-resolve');
       await publicClient.waitForTransactionReceipt({ hash: resolveTx });
@@ -110,18 +120,18 @@ export function ResolveOnchainButton({ marketId, onchainId, outcome, outcomes, m
   }
 
   async function handleReport() {
-    if (!walletClient || !publicClient || !reporterAddress) return;
+    if (!address || !publicClient || !reporterAddress) return;
     setError(null);
     setTxHash(null);
 
     try {
       setStep('reporting');
-      const reportTx = await walletClient.writeContract({
-        address: reporterAddress,
+      const reportData = encodeFunctionData({
         abi: REPORTER_ABI,
         functionName: 'reportResult',
         args: [marketAddress, BigInt(onchainId), BigInt(outcomeIndex)],
       });
+      const reportTx = await sendTx(reporterAddress, reportData, address);
       setTxHash(reportTx);
       setStep('confirming-report');
       await publicClient.waitForTransactionReceipt({ hash: reportTx });

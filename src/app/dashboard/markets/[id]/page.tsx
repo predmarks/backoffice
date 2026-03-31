@@ -17,6 +17,7 @@ import { MarketActions } from './_components/MarketActions';
 
 import { CopyJsonButton } from './_components/CopyJsonButton';
 import { CheckResolutionTrigger } from './_components/CheckResolutionTrigger';
+import { DeployMarketButton } from './_components/DeployMarketButton';
 import { OnchainActionsWrapper as OnchainActions } from './_components/OnchainActionsWrapper';
 import { ResolveOnchainButton } from './_components/ResolveOnchainButton';
 import { Markdown } from '../../../_components/Markdown';
@@ -297,6 +298,7 @@ export default async function MarketDetailPage({ params }: Props) {
                   outcome={market.outcome!}
                   outcomes={(market.outcomes as string[]) ?? ['Si', 'No']}
                   marketAddress={onchainData!.marketAddress as `0x${string}`}
+                  chainId={market.chainId}
                 />
               </div>
             )}
@@ -312,6 +314,7 @@ export default async function MarketDetailPage({ params }: Props) {
                   outcome={market.outcome!}
                   outcomes={(market.outcomes as string[]) ?? ['Si', 'No']}
                   marketAddress={onchainData!.marketAddress as `0x${string}`}
+                  chainId={market.chainId}
                   reportOnly
                 />
               </div>
@@ -344,6 +347,13 @@ export default async function MarketDetailPage({ params }: Props) {
                 <Link href={`/dashboard/topics/${t.slug}`} className="text-blue-600 hover:underline">{t.name}</Link>
               </span>
             ))}
+          </div>
+        )}
+
+        {/* Deploy button for candidates without onchainId */}
+        {market.status === 'candidate' && !market.onchainId && (
+          <div className="mb-4">
+            <DeployMarketButton marketId={market.id} deployable={deployable} />
           </div>
         )}
 

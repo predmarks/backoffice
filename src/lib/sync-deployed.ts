@@ -61,7 +61,13 @@ export async function syncMarketStats(chainId: number = MAINNET_CHAIN_ID): Promi
         .where(eq(markets.id, existing.id));
       updated++;
     } else {
-      // New market — insert with basic indexer data
+      // Check if a DB market with the same title exists (candidate deployed but not yet linked)
+      const [titleMatch] = await db
+        .select({ id: markets.id })
+        .from(markets)
+        .where(eq(markets.title, om.name))
+        .limit(1);
+
       const isResolved = om.resolvedTo > 0;
       const status = isResolved
         ? 'closed'
@@ -69,28 +75,48 @@ export async function syncMarketStats(chainId: number = MAINNET_CHAIN_ID): Promi
           ? 'in_resolution'
           : 'open';
 
-      const sourceContext: SourceContext = {
-        originType: 'manual',
-        generatedAt: new Date().toISOString(),
-      };
+      if (titleMatch) {
+        // Link existing candidate to onchain market
+        await db
+          .update(markets)
+          .set({
+            onchainId: om.onchainId,
+            onchainAddress: om.id,
+            category: om.category,
+            endTimestamp: om.endTimestamp,
+            expectedResolutionDate: toDateString(om.endTimestamp),
+            volume: om.volume,
+            participants: om.participants,
+            status,
+            chainId,
+          })
+          .where(eq(markets.id, titleMatch.id));
+        updated++;
+      } else {
+        // New market — insert with basic indexer data
+        const sourceContext: SourceContext = {
+          originType: 'manual',
+          generatedAt: new Date().toISOString(),
+        };
 
-      await db.insert(markets).values({
-        onchainId: om.onchainId,
-        onchainAddress: om.id,
-        title: om.name,
-        description: '',
-        resolutionCriteria: '',
-        resolutionSource: '',
-        category: om.category,
-        endTimestamp: om.endTimestamp,
-        expectedResolutionDate: toDateString(om.endTimestamp),
-        volume: om.volume,
-        participants: om.participants,
-        status,
-        chainId,
-        sourceContext,
-      });
-      created++;
+        await db.insert(markets).values({
+          onchainId: om.onchainId,
+          onchainAddress: om.id,
+          title: om.name,
+          description: '',
+          resolutionCriteria: '',
+          resolutionSource: '',
+          category: om.category,
+          endTimestamp: om.endTimestamp,
+          expectedResolutionDate: toDateString(om.endTimestamp),
+          volume: om.volume,
+          participants: om.participants,
+          status,
+          chainId,
+          sourceContext,
+        });
+        created++;
+      }
     }
   }
 
@@ -177,27 +203,34 @@ export async function syncDeployedMarkets(chainId: number = MAINNET_CHAIN_ID): P
           generatedAt: new Date().toISOString(),
         };
 
-        const [inserted] = await db.insert(markets).values({
-          onchainId: om.onchainId,
-          onchainAddress: om.id,
-          title: om.name,
-          description: '',
-          resolutionCriteria: '',
-          resolutionSource: '',
-          category: om.category,
-          endTimestamp: om.endTimestamp,
-          expectedResolutionDate,
-          volume: om.volume,
-          participants: om.participants,
-          status: 'closed',
-          outcome: outcome ?? undefined,
-          outcomes: outcomes.length > 0 ? outcomes : undefined,
-          resolvedAt: new Date(),
-          chainId,
-          sourceContext,
-        }).returning({ id: markets.id });
+        // Check for existing candidate by title before inserting
+        const [titleMatch] = await db.select({ id: markets.id }).from(markets).where(eq(markets.title, om.name)).limit(1);
+        let inserted: { id: string };
 
-        created++;
+        if (titleMatch) {
+          await db.update(markets).set({
+            onchainId: om.onchainId, onchainAddress: om.id, category: om.category,
+            endTimestamp: om.endTimestamp, expectedResolutionDate,
+            volume: om.volume, participants: om.participants,
+            status: 'closed', outcome: outcome ?? undefined,
+            outcomes: outcomes.length > 0 ? outcomes : undefined,
+            resolvedAt: new Date(), chainId,
+          }).where(eq(markets.id, titleMatch.id));
+          inserted = titleMatch;
+          updated++;
+        } else {
+          const [created_] = await db.insert(markets).values({
+            onchainId: om.onchainId, onchainAddress: om.id,
+            title: om.name, description: '', resolutionCriteria: '', resolutionSource: '',
+            category: om.category, endTimestamp: om.endTimestamp, expectedResolutionDate,
+            volume: om.volume, participants: om.participants,
+            status: 'closed', outcome: outcome ?? undefined,
+            outcomes: outcomes.length > 0 ? outcomes : undefined,
+            resolvedAt: new Date(), chainId, sourceContext,
+          }).returning({ id: markets.id });
+          inserted = created_;
+          created++;
+        }
         resolved++;
 
         logActivity('market_synced', {
@@ -255,28 +288,35 @@ export async function syncDeployedMarkets(chainId: number = MAINNET_CHAIN_ID): P
         toExpand.push({ id: existing.id, onchainId: om.onchainId, title: om.name, category: om.category, endTimestamp: om.endTimestamp });
       }
     } else {
-      const sourceContext: SourceContext = {
-        originType: 'manual',
-        generatedAt: new Date().toISOString(),
-      };
+      // Check for existing candidate by title before inserting
+      const [titleMatch] = await db.select({ id: markets.id }).from(markets).where(eq(markets.title, om.name)).limit(1);
+      let inserted: { id: string };
 
-      const [inserted] = await db.insert(markets).values({
-        onchainId: om.onchainId,
-        onchainAddress: om.id,
-        title: om.name,
-        description: '',
-        resolutionCriteria: '',
-        resolutionSource: '',
-        category: om.category,
-        endTimestamp: om.endTimestamp,
-        expectedResolutionDate,
-        volume: om.volume,
-        participants: om.participants,
-        status,
-        chainId,
-        sourceContext,
-      }).returning({ id: markets.id });
-      created++;
+      if (titleMatch) {
+        await db.update(markets).set({
+          onchainId: om.onchainId, onchainAddress: om.id, category: om.category,
+          endTimestamp: om.endTimestamp, expectedResolutionDate,
+          volume: om.volume, participants: om.participants,
+          status, chainId,
+        }).where(eq(markets.id, titleMatch.id));
+        inserted = titleMatch;
+        updated++;
+      } else {
+        const sourceContext: SourceContext = {
+          originType: 'manual',
+          generatedAt: new Date().toISOString(),
+        };
+
+        const [created_] = await db.insert(markets).values({
+          onchainId: om.onchainId, onchainAddress: om.id,
+          title: om.name, description: '', resolutionCriteria: '', resolutionSource: '',
+          category: om.category, endTimestamp: om.endTimestamp, expectedResolutionDate,
+          volume: om.volume, participants: om.participants,
+          status, chainId, sourceContext,
+        }).returning({ id: markets.id });
+        inserted = created_;
+        created++;
+      }
       logActivity('market_synced', {
         entityType: 'market',
         entityId: inserted.id,

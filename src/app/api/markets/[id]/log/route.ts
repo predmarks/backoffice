@@ -6,6 +6,7 @@ import { logActivity } from '@/lib/activity-log';
 import type { Resolution } from '@/db/types';
 
 const ALLOWED_ACTIONS = [
+  'market_deployed_onchain',
   'market_updated_onchain',
   'market_resolved_onchain',
   'market_reported_onchain',
@@ -30,6 +31,17 @@ export async function POST(
 
   if (!market) {
     return NextResponse.json({ error: 'Market not found' }, { status: 404 });
+  }
+
+  // Link deployed market: set onchainId, chainId, status
+  if (action === 'market_deployed_onchain' && detail?.onchainId) {
+    const updates: Record<string, unknown> = {
+      onchainId: String(detail.onchainId),
+      status: 'open',
+    };
+    if (detail.chainId) updates.chainId = Number(detail.chainId);
+    if (detail.onchainAddress) updates.onchainAddress = String(detail.onchainAddress);
+    await db.update(markets).set(updates).where(eq(markets.id, id));
   }
 
   // Track reporter pending state in resolution object
