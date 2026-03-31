@@ -1,6 +1,7 @@
 import { db } from '@/db/client';
 import { markets } from '@/db/schema';
-import { sql, isNotNull, and, ne } from 'drizzle-orm';
+import { sql, isNotNull, and, ne, eq } from 'drizzle-orm';
+import { MAINNET_CHAIN_ID } from './chains';
 
 export function parseVolume(vol: string | null): number {
   if (!vol) return 0;
@@ -39,7 +40,7 @@ export interface AnalyticsData {
   overTime: MarketTimePoint[];
 }
 
-export async function getMarketAnalytics(tz: string = 'America/Argentina/Buenos_Aires'): Promise<AnalyticsData> {
+export async function getMarketAnalytics(tz: string = 'America/Argentina/Buenos_Aires', chainId: number = MAINNET_CHAIN_ID): Promise<AnalyticsData> {
   // All onchain markets (have onchainId from indexer sync)
   const publishedMarkets = await db
     .select({
@@ -50,7 +51,7 @@ export async function getMarketAnalytics(tz: string = 'America/Argentina/Buenos_
       status: markets.status,
     })
     .from(markets)
-    .where(isNotNull(markets.onchainId));
+    .where(and(isNotNull(markets.onchainId), eq(markets.chainId, chainId)));
 
   // Summary
   let totalVolume = 0;

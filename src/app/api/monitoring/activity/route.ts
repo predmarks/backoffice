@@ -3,6 +3,7 @@ import { db } from '@/db/client';
 import { markets, marketEvents } from '@/db/schema';
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import type { Iteration, Review, Resolution } from '@/db/types';
+import { validateChainId } from '@/lib/chains';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +30,9 @@ interface MarketMonitorEntry {
 
 export async function GET(request: NextRequest) {
   const filterStatus = request.nextUrl.searchParams.get('status');
+  const chainId = validateChainId(Number(request.nextUrl.searchParams.get('chain')) || undefined);
+
+  const chainFilter = and(eq(markets.isArchived, false), eq(markets.chainId, chainId));
 
   // Always get counts (excluding archived)
   const countRows = await db
@@ -37,7 +41,7 @@ export async function GET(request: NextRequest) {
       count: sql<number>`count(*)::int`,
     })
     .from(markets)
-    .where(eq(markets.isArchived, false))
+    .where(chainFilter)
     .groupBy(markets.status);
 
   const counts: Record<string, number> = {};
@@ -58,9 +62,9 @@ export async function GET(request: NextRequest) {
     const statusFilter = statuses.length > 1
       ? inArray(markets.status, statuses)
       : eq(markets.status, statuses[0]);
-    rows = await query.where(and(eq(markets.isArchived, false), statusFilter));
+    rows = await query.where(and(chainFilter, statusFilter));
   } else {
-    rows = await query.where(eq(markets.isArchived, false));
+    rows = await query.where(chainFilter);
   }
 
   // For processing markets, get their latest event

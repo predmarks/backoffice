@@ -84,7 +84,7 @@ async function buildTopicContext(topicId: string): Promise<string> {
   if (!topic) return 'Tema no encontrado.';
 
   const linkedSignals = await db
-    .select({ text: signals.text, source: signals.source, publishedAt: signals.publishedAt })
+    .select({ text: signals.text, source: signals.source, url: signals.url, publishedAt: signals.publishedAt })
     .from(topicSignals)
     .innerJoin(signals, eq(topicSignals.signalId, signals.id))
     .where(eq(topicSignals.topicId, topicId))
@@ -92,6 +92,21 @@ async function buildTopicContext(topicId: string): Promise<string> {
     .limit(20);
 
   const feedbackEntries = (topic.feedback ?? []) as { text: string; createdAt: string }[];
+
+  // Find markets linked to this topic
+  const allMarkets = await db
+    .select({ id: markets.id, title: markets.title, status: markets.status, category: markets.category, onchainId: markets.onchainId, sourceContext: markets.sourceContext })
+    .from(markets)
+    .where(eq(markets.isArchived, false));
+  const relatedMarkets = allMarkets.filter((m) => {
+    const ctx = m.sourceContext as { topicIds?: string[] } | null;
+    return ctx?.topicIds?.includes(topicId);
+  });
+
+  let marketsSection = '';
+  if (relatedMarkets.length > 0) {
+    marketsSection = `\n\nMERCADOS VINCULADOS (${relatedMarkets.length}):\n${relatedMarkets.map((m) => `- [${m.status}] ${m.title} (${m.category}${m.onchainId ? `, #${m.onchainId}` : ''})`).join('\n')}`;
+  }
 
   return `CONTEXTO: TEMA
 - Nombre: ${topic.name}
@@ -104,24 +119,36 @@ async function buildTopicContext(topicId: string): Promise<string> {
 ${topic.suggestedAngles.length > 0 ? topic.suggestedAngles.map((a) => `- ${a}`).join('\n') : 'Sin ángulos.'}
 
 SEÑALES VINCULADAS (${linkedSignals.length}):
-${linkedSignals.length > 0 ? linkedSignals.map((s, i) => `${i + 1}. [${s.source}] ${s.text} (${s.publishedAt.toISOString().split('T')[0]})`).join('\n') : 'Sin señales.'}
+${linkedSignals.length > 0 ? linkedSignals.map((s, i) => `${i + 1}. [${s.source}] ${s.text} (${s.publishedAt.toISOString().split('T')[0]})${s.url ? ` ${s.url}` : ''}`).join('\n') : 'Sin señales.'}
 
 FEEDBACK PREVIO:
-${feedbackEntries.length > 0 ? feedbackEntries.map((f) => `- ${f.text}`).join('\n') : 'Sin feedback.'}`;
+${feedbackEntries.length > 0 ? feedbackEntries.map((f) => `- ${f.text}`).join('\n') : 'Sin feedback.'}${marketsSection}`;
 }
 
 async function buildMarketContext(marketId: string, tz: string = 'America/Argentina/Buenos_Aires'): Promise<string> {
   const [market] = await db.select().from(markets).where(eq(markets.id, marketId));
   if (!market) return 'Mercado no encontrado.';
 
-  const sourceContext = market.sourceContext as { topicIds?: string[] } | null;
+  const sourceContext = market.sourceContext as { topicIds?: string[]; topicNames?: string[] } | null;
   const sourceTopicIds = sourceContext?.topicIds ?? [];
+
+  // Fetch source topics
+  let topicsContext = '';
+  if (sourceTopicIds.length > 0) {
+    const sourceTopics = await db
+      .select({ id: topics.id, name: topics.name, slug: topics.slug })
+      .from(topics)
+      .where(inArray(topics.id, sourceTopicIds));
+    if (sourceTopics.length > 0) {
+      topicsContext = `\n\nTEMAS VINCULADOS (${sourceTopics.length}):\n${sourceTopics.map((t) => `- ${t.name}`).join('\n')}`;
+    }
+  }
 
   // Fetch related signals through source topics
   let signalsContext = '';
   if (sourceTopicIds.length > 0) {
     const relatedSignals = await db
-      .select({ text: signals.text, source: signals.source, publishedAt: signals.publishedAt })
+      .select({ text: signals.text, source: signals.source, url: signals.url, publishedAt: signals.publishedAt })
       .from(topicSignals)
       .innerJoin(signals, eq(topicSignals.signalId, signals.id))
       .where(inArray(topicSignals.topicId, sourceTopicIds))
@@ -129,8 +156,50 @@ async function buildMarketContext(marketId: string, tz: string = 'America/Argent
       .limit(20);
 
     if (relatedSignals.length > 0) {
-      signalsContext = `\n\nSEÑALES RELACIONADAS (${relatedSignals.length}):\n${relatedSignals.map((s, i) => `${i + 1}. [${s.source}] ${s.text} (${s.publishedAt.toISOString().split('T')[0]})`).join('\n')}`;
+      signalsContext = `\n\nSEÑALES RELACIONADAS (${relatedSignals.length}):\n${relatedSignals.map((s, i) => `${i + 1}. [${s.source}] ${s.text} (${s.publishedAt.toISOString().split('T')[0]})${s.url ? ` ${s.url}` : ''}`).join('\n')}`;
     }
+  }
+
+  // Fetch onchain data for diff comparison
+  let diffContext = '';
+  if (market.onchainId) {
+    try {
+      const { fetchOnchainMarketData } = await import('@/lib/onchain');
+      const onchain = await fetchOnchainMarketData(Number(market.onchainId), market.chainId);
+      const diffs: string[] = [];
+      if (market.title !== onchain.name) diffs.push(`  Título: local="${market.title}" vs onchain="${onchain.name}"`);
+      if (market.description !== onchain.description) diffs.push(`  Descripción: local="${market.description.slice(0, 100)}..." vs onchain="${onchain.description.slice(0, 100)}..."`);
+      if (market.category !== onchain.category) diffs.push(`  Categoría: local="${market.category}" vs onchain="${onchain.category}"`);
+      if (JSON.stringify(market.outcomes) !== JSON.stringify(onchain.outcomes)) diffs.push(`  Opciones: local=[${(market.outcomes as string[]).join(', ')}] vs onchain=[${onchain.outcomes.join(', ')}]`);
+      if (market.endTimestamp !== onchain.endTimestamp) diffs.push(`  Fecha cierre: local=${new Date(market.endTimestamp * 1000).toISOString().split('T')[0]} vs onchain=${new Date(onchain.endTimestamp * 1000).toISOString().split('T')[0]}`);
+      if (diffs.length > 0) {
+        diffContext = `\n\nDIFERENCIAS LOCAL vs ONCHAIN (${diffs.length}):\n${diffs.join('\n')}`;
+      } else {
+        diffContext = '\n\nEstado onchain: EN SYNC (sin diferencias)';
+      }
+    } catch { /* RPC failure — skip */ }
+  }
+
+  // Resolution & review info
+  const resolution = market.resolution as { suggestedOutcome?: string; confidence?: string; confirmedAt?: string } | null;
+  const review = market.review as { scores?: { overallScore?: number }; recommendation?: string } | null;
+
+  let resolutionContext = '';
+  if (market.outcome) {
+    resolutionContext = `\n- Resultado: ${market.outcome}${market.status === 'closed' ? ' (confirmado onchain)' : ' (pendiente onchain)'}`;
+  }
+  if (resolution?.suggestedOutcome && !market.outcome) {
+    resolutionContext = `\n- Resolución sugerida: ${resolution.suggestedOutcome} (confianza: ${resolution.confidence ?? 'unknown'})`;
+  }
+
+  let reviewContext = '';
+  if (review?.scores?.overallScore != null) {
+    reviewContext = `\n- Score revisión: ${review.scores.overallScore}/10${review.recommendation ? ` (${review.recommendation})` : ''}`;
+  }
+
+  let onchainContext = '';
+  if (market.onchainId) {
+    onchainContext = `\n- Onchain ID: #${market.onchainId}${market.volume ? `, Volumen: ${market.volume}` : ''}${market.participants ? `, Participantes: ${market.participants}` : ''}`;
   }
 
   return `CONTEXTO: MERCADO
@@ -143,7 +212,7 @@ async function buildMarketContext(marketId: string, tz: string = 'America/Argent
 - Fuente de resolución: ${market.resolutionSource}
 - Contingencias: ${market.contingencies}
 - Cierre: ${new Date(market.endTimestamp * 1000).toLocaleString('es-AR', { timeZone: tz })} (timestamp: ${market.endTimestamp})
-- Fecha resolución esperada: ${market.expectedResolutionDate ?? 'no definida'}${signalsContext}`;
+- Fecha resolución esperada: ${market.expectedResolutionDate ?? 'no definida'}${resolutionContext}${reviewContext}${onchainContext}${topicsContext}${signalsContext}${diffContext}`;
 }
 
 async function buildSignalContext(signalId: string): Promise<string> {
@@ -1003,28 +1072,29 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
 export async function GET(request: NextRequest) {
   const contextType = request.nextUrl.searchParams.get('contextType') as ContextType | null;
   const contextId = request.nextUrl.searchParams.get('contextId');
+  const limit = Math.min(Number(request.nextUrl.searchParams.get('limit')) || 10, 50);
+  const offset = Number(request.nextUrl.searchParams.get('offset')) || 0;
 
-  let query = db.select().from(conversations).orderBy(desc(conversations.updatedAt)).limit(50);
+  const whereClause = contextType && contextId
+    ? and(eq(conversations.contextType, contextType), eq(conversations.contextId, contextId))
+    : contextType
+      ? eq(conversations.contextType, contextType)
+      : undefined;
 
-  let rows;
-  if (contextType && contextId) {
-    rows = await db.select().from(conversations)
-      .where(eq(conversations.contextType, contextType))
-      .orderBy(desc(conversations.updatedAt))
-      .limit(50);
-    // Filter by contextId in JS since we can't easily chain .where with and
-    rows = rows.filter((r) => r.contextId === contextId);
-  } else if (contextType) {
-    rows = await db.select().from(conversations)
-      .where(eq(conversations.contextType, contextType))
-      .orderBy(desc(conversations.updatedAt))
-      .limit(50);
-  } else {
-    rows = await query;
-  }
+  const [rows, [{ total }]] = await Promise.all([
+    whereClause
+      ? db.select().from(conversations).where(whereClause).orderBy(desc(conversations.updatedAt)).limit(limit + 1).offset(offset)
+      : db.select().from(conversations).orderBy(desc(conversations.updatedAt)).limit(limit + 1).offset(offset),
+    whereClause
+      ? db.select({ total: sql<number>`count(*)::int` }).from(conversations).where(whereClause)
+      : db.select({ total: sql<number>`count(*)::int` }).from(conversations),
+  ]);
+
+  const hasMore = rows.length > limit;
+  const sliced = hasMore ? rows.slice(0, limit) : rows;
 
   return NextResponse.json({
-    conversations: rows.map((c) => ({
+    conversations: sliced.map((c) => ({
       id: c.id,
       contextType: c.contextType,
       contextId: c.contextId,
@@ -1032,6 +1102,8 @@ export async function GET(request: NextRequest) {
       messages: c.messages,
       updatedAt: c.updatedAt.toISOString(),
     })),
+    hasMore,
+    total,
   });
 }
 

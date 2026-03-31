@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { MAINNET_CHAIN_ID } from '@/lib/chains';
 
 interface MarketEntry {
   id: string;
@@ -47,10 +49,15 @@ function timeRemaining(ts: number): string {
   return `${hours}h`;
 }
 
-export function MarketList({ markets }: { markets: MarketEntry[] }) {
+export function MarketList({ markets, chainId }: { markets: MarketEntry[]; chainId: number }) {
+  const router = useRouter();
   const [query, setQuery] = useState('');
   const [verifyingIds, setVerifyingIds] = useState<Set<string>>(new Set());
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ created: number; updated: number } | null>(null);
   const prevMarketsRef = useRef(markets);
+
+  const isTestnet = chainId !== MAINNET_CHAIN_ID;
 
   // Clear verifying state when markets data refreshes (new props from server)
   useEffect(() => {
@@ -59,6 +66,27 @@ export function MarketList({ markets }: { markets: MarketEntry[] }) {
       prevMarketsRef.current = markets;
     }
   }, [markets]);
+
+  // Background sync: pull fresh indexer data, then refresh server component
+  useEffect(() => {
+    setSyncing(true);
+    fetch('/api/sync-stats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chainId }),
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          const result = await res.json();
+          setSyncResult(result);
+          if (result.created > 0 || result.updated > 0) {
+            router.refresh();
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => setSyncing(false));
+  }, [router, chainId]);
 
   async function handleCheckResolution(id: string, e: React.MouseEvent) {
     e.preventDefault();
@@ -79,7 +107,22 @@ export function MarketList({ markets }: { markets: MarketEntry[] }) {
   return (
     <>
       <div className="flex items-center justify-between gap-4 mb-8">
-        <h1 className="text-3xl font-bold shrink-0">Live</h1>
+        <div className="flex items-center gap-3 shrink-0">
+          <h1 className="text-3xl font-bold">Live</h1>
+          {isTestnet && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">Testnet</span>
+          )}
+          {syncing && (
+            <span className="text-xs text-gray-400 animate-pulse">Sincronizando...</span>
+          )}
+          {!syncing && syncResult && (syncResult.created > 0 || syncResult.updated > 0) && (
+            <span className="text-xs text-green-600">
+              {syncResult.created > 0 && `+${syncResult.created} nuevos`}
+              {syncResult.created > 0 && syncResult.updated > 0 && ', '}
+              {syncResult.updated > 0 && `${syncResult.updated} actualizados`}
+            </span>
+          )}
+        </div>
         <input
           type="text"
           value={query}

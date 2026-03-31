@@ -62,6 +62,10 @@ export const resolutionJob = inngest.createFunction(
       return { status: 'skipped', reason: `status: ${market?.status ?? 'not found'}` };
     }
 
+    if (market.chainId !== 8453) {
+      return { status: 'skipped', reason: 'testnet market' };
+    }
+
     // Fetch resolution source content and save as signal
     const sourceContent = await step.run('fetch-resolution-source', async () => {
       const urls = extractUrls(`${market.resolutionSource} ${market.description}`);

@@ -1,12 +1,13 @@
 import { db } from '@/db/client';
 import { markets } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { fetchOnchainMarkets } from './indexer';
 import { expandMarket } from './expand-market';
 import { fetchOnchainMarketData } from './onchain';
 import { matchMarketsToTopics } from './match-market-topic';
 import { inngest } from '@/inngest/client';
 import { logActivity } from '@/lib/activity-log';
+import { isTestnet, MAINNET_CHAIN_ID } from './chains';
 import type { SourceContext } from '@/db/types';
 
 function toDateString(ts: number): string {
@@ -18,7 +19,85 @@ function mapResolvedOutcome(resolvedTo: number, outcomes: string[]): string | nu
   return outcomes[resolvedTo - 1]; // 1-indexed
 }
 
-export async function syncDeployedMarkets(): Promise<{
+/**
+ * Lightweight sync: fetches indexer data and upserts volume/participants/status.
+ * Creates new markets with basic data (no LLM expansion).
+ * Designed to run on every dashboard page load (~1-2s).
+ */
+export async function syncMarketStats(chainId: number = MAINNET_CHAIN_ID): Promise<{
+  created: number;
+  updated: number;
+}> {
+  const onchainMarkets = await fetchOnchainMarkets(chainId);
+  const now = Math.floor(Date.now() / 1000);
+  let created = 0;
+  let updated = 0;
+
+  for (const om of onchainMarkets) {
+    const [existing] = await db
+      .select({ id: markets.id, status: markets.status, endTimestamp: markets.endTimestamp })
+      .from(markets)
+      .where(and(eq(markets.onchainId, om.onchainId), eq(markets.chainId, chainId)));
+
+    if (existing) {
+      const isResolved = om.resolvedTo > 0;
+      // Use DB endTimestamp for status (DB is source of truth for content fields)
+      const endTs = existing.endTimestamp;
+      const status = isResolved
+        ? 'closed'
+        : endTs && now > endTs
+          ? 'in_resolution'
+          : 'open';
+      // Only preserve 'rejected' unconditionally; 'closed' is preserved only if onchain confirms
+      const preserveStatus = existing.status === 'rejected' || (existing.status === 'closed' && isResolved);
+
+      await db
+        .update(markets)
+        .set({
+          volume: om.volume,
+          participants: om.participants,
+          ...(preserveStatus ? {} : { status }),
+        })
+        .where(eq(markets.id, existing.id));
+      updated++;
+    } else {
+      // New market — insert with basic indexer data
+      const isResolved = om.resolvedTo > 0;
+      const status = isResolved
+        ? 'closed'
+        : om.endTimestamp && now > om.endTimestamp
+          ? 'in_resolution'
+          : 'open';
+
+      const sourceContext: SourceContext = {
+        originType: 'manual',
+        generatedAt: new Date().toISOString(),
+      };
+
+      await db.insert(markets).values({
+        onchainId: om.onchainId,
+        onchainAddress: om.id,
+        title: om.name,
+        description: '',
+        resolutionCriteria: '',
+        resolutionSource: '',
+        category: om.category,
+        endTimestamp: om.endTimestamp,
+        expectedResolutionDate: toDateString(om.endTimestamp),
+        volume: om.volume,
+        participants: om.participants,
+        status,
+        chainId,
+        sourceContext,
+      });
+      created++;
+    }
+  }
+
+  return { created, updated };
+}
+
+export async function syncDeployedMarkets(chainId: number = MAINNET_CHAIN_ID): Promise<{
   created: number;
   updated: number;
   expanded: number;
@@ -27,7 +106,7 @@ export async function syncDeployedMarkets(): Promise<{
   topicResearchDispatched: number;
   resolutionTriggered: number;
 }> {
-  const onchainMarkets = await fetchOnchainMarkets();
+  const onchainMarkets = await fetchOnchainMarkets(chainId);
   const now = Math.floor(Date.now() / 1000);
   let created = 0;
   let updated = 0;
@@ -44,14 +123,14 @@ export async function syncDeployedMarkets(): Promise<{
       const [existing] = await db
         .select({ id: markets.id, status: markets.status, outcomes: markets.outcomes })
         .from(markets)
-        .where(eq(markets.onchainId, om.onchainId));
+        .where(and(eq(markets.onchainId, om.onchainId), eq(markets.chainId, chainId)));
 
       if (existing && existing.status !== 'closed') {
         // Get outcomes from DB or fetch from contract
         let outcomes = (existing.outcomes as string[]) ?? [];
         if (outcomes.length === 0) {
           try {
-            const onchainData = await fetchOnchainMarketData(Number(om.onchainId));
+            const onchainData = await fetchOnchainMarketData(Number(om.onchainId), chainId);
             outcomes = onchainData.outcomes;
           } catch { /* use empty */ }
         }
@@ -87,7 +166,7 @@ export async function syncDeployedMarkets(): Promise<{
         // Resolved market not yet in DB — import it
         let outcomes: string[] = [];
         try {
-          const onchainData = await fetchOnchainMarketData(Number(om.onchainId));
+          const onchainData = await fetchOnchainMarketData(Number(om.onchainId), chainId);
           outcomes = onchainData.outcomes;
         } catch { /* use empty */ }
 
@@ -114,6 +193,7 @@ export async function syncDeployedMarkets(): Promise<{
           outcome: outcome ?? undefined,
           outcomes: outcomes.length > 0 ? outcomes : undefined,
           resolvedAt: new Date(),
+          chainId,
           sourceContext,
         }).returning({ id: markets.id });
 
@@ -139,10 +219,12 @@ export async function syncDeployedMarkets(): Promise<{
     const [existing] = await db
       .select({ id: markets.id, status: markets.status, description: markets.description, expectedResolutionDate: markets.expectedResolutionDate })
       .from(markets)
-      .where(eq(markets.onchainId, om.onchainId));
+      .where(and(eq(markets.onchainId, om.onchainId), eq(markets.chainId, chainId)));
 
     if (existing) {
-      const preserveStatus = ['closed', 'rejected'].includes(existing.status);
+      // This block only runs for unresolved markets (resolvedTo <= 0),
+      // so 'closed' DB status is stale — only preserve 'rejected'
+      const preserveStatus = existing.status === 'rejected';
       const needsExpand = !existing.description;
       await db
         .update(markets)
@@ -191,6 +273,7 @@ export async function syncDeployedMarkets(): Promise<{
         volume: om.volume,
         participants: om.participants,
         status,
+        chainId,
         sourceContext,
       }).returning({ id: markets.id });
       created++;
@@ -215,7 +298,7 @@ export async function syncDeployedMarkets(): Promise<{
       let realDescription = '';
       let realOutcomes: string[] | undefined;
       try {
-        const onchainData = await fetchOnchainMarketData(Number(market.onchainId));
+        const onchainData = await fetchOnchainMarketData(Number(market.onchainId), chainId);
         if (onchainData.description) {
           realDescription = onchainData.description;
           updates.description = realDescription;
@@ -228,22 +311,23 @@ export async function syncDeployedMarkets(): Promise<{
         console.warn(`[sync] Could not fetch onchain data for market ${market.onchainId}:`, err);
       }
 
-      // LLM-expand remaining fields (resolutionCriteria, resolutionSource, contingencies, tags)
-      // Pass real description if available for better context
-      const generated = await expandMarket({
-        title: market.title,
-        category: market.category,
-        endTimestamp: market.endTimestamp,
-        ...(realDescription ? { description: realDescription } : {}),
-        ...(realOutcomes ? { outcomes: realOutcomes } : {}),
-      });
+      // Skip LLM expansion for testnet markets
+      if (!isTestnet(chainId)) {
+        const generated = await expandMarket({
+          title: market.title,
+          category: market.category,
+          endTimestamp: market.endTimestamp,
+          ...(realDescription ? { description: realDescription } : {}),
+          ...(realOutcomes ? { outcomes: realOutcomes } : {}),
+        });
 
-      if (!realDescription && generated.description) updates.description = generated.description;
-      if (generated.resolutionCriteria) updates.resolutionCriteria = generated.resolutionCriteria;
-      if (generated.resolutionSource) updates.resolutionSource = generated.resolutionSource;
-      if (generated.contingencies) updates.contingencies = generated.contingencies;
-      if (generated.tags) updates.tags = generated.tags;
-      if (generated.expectedResolutionDate) updates.expectedResolutionDate = generated.expectedResolutionDate;
+        if (!realDescription && generated.description) updates.description = generated.description;
+        if (generated.resolutionCriteria) updates.resolutionCriteria = generated.resolutionCriteria;
+        if (generated.resolutionSource) updates.resolutionSource = generated.resolutionSource;
+        if (generated.contingencies) updates.contingencies = generated.contingencies;
+        if (generated.tags) updates.tags = generated.tags;
+        if (generated.expectedResolutionDate) updates.expectedResolutionDate = generated.expectedResolutionDate;
+      }
 
       if (Object.keys(updates).length > 0) {
         await db.update(markets).set(updates).where(eq(markets.id, market.id));
@@ -254,67 +338,66 @@ export async function syncDeployedMarkets(): Promise<{
     }
   }
 
-  // Phase 3: Associate markets with topics
-  // Find all synced markets missing topic association
-  const allSyncedIds = onchainMarkets.map((om) => om.onchainId);
-  const needsTopicRows = allSyncedIds.length > 0
-    ? await db
-        .select({ id: markets.id, title: markets.title, category: markets.category, description: markets.description, sourceContext: markets.sourceContext })
-        .from(markets)
-        .where(eq(markets.isArchived, false))
-    : [];
+  // Phase 3: Associate markets with topics (mainnet only)
+  if (!isTestnet(chainId)) {
+    const allSyncedIds = onchainMarkets.map((om) => om.onchainId);
+    const needsTopicRows = allSyncedIds.length > 0
+      ? await db
+          .select({ id: markets.id, title: markets.title, category: markets.category, description: markets.description, sourceContext: markets.sourceContext })
+          .from(markets)
+          .where(eq(markets.isArchived, false))
+      : [];
 
-  const needsTopic = needsTopicRows.filter((m) => {
-    const ctx = m.sourceContext as SourceContext | null;
-    return !ctx?.topicIds?.length && m.description;
-  });
+    const needsTopic = needsTopicRows.filter((m) => {
+      const ctx = m.sourceContext as SourceContext | null;
+      return !ctx?.topicIds?.length && m.description;
+    });
 
-  if (needsTopic.length > 0) {
-    const topicMatches = await matchMarketsToTopics(
-      needsTopic.map((m) => ({
-        id: m.id,
-        title: m.title,
-        category: m.category,
-        description: m.description,
-      })),
-    );
+    if (needsTopic.length > 0) {
+      const topicMatches = await matchMarketsToTopics(
+        needsTopic.map((m) => ({
+          id: m.id,
+          title: m.title,
+          category: m.category,
+          description: m.description,
+        })),
+      );
 
-    const inngestEvents: { name: 'topics/suggest.requested'; data: { description: string; marketId: string } }[] = [];
+      const inngestEvents: { name: 'topics/suggest.requested'; data: { description: string; marketId: string } }[] = [];
 
-    for (const m of needsTopic) {
-      const match = topicMatches.get(m.id);
-      const ctx = (m.sourceContext as SourceContext) ?? { originType: 'manual' as const, generatedAt: new Date().toISOString() };
+      for (const m of needsTopic) {
+        const match = topicMatches.get(m.id);
+        const ctx = (m.sourceContext as SourceContext) ?? { originType: 'manual' as const, generatedAt: new Date().toISOString() };
 
-      if (match) {
-        // Matched existing topic — link immediately
-        await db.update(markets).set({
-          sourceContext: {
-            ...ctx,
-            topicIds: [...(ctx.topicIds ?? []), match.topicId],
-            topicNames: [...(ctx.topicNames ?? []), match.topicName],
-          },
-        }).where(eq(markets.id, m.id));
-        topicLinked++;
-      } else {
-        // No match — dispatch async research to create topic + signals
-        inngestEvents.push({
-          name: 'topics/suggest.requested',
-          data: {
-            description: `${m.title}. ${m.description.slice(0, 300)}`,
-            marketId: m.id,
-          },
-        });
-        topicResearchDispatched++;
+        if (match) {
+          await db.update(markets).set({
+            sourceContext: {
+              ...ctx,
+              topicIds: [...(ctx.topicIds ?? []), match.topicId],
+              topicNames: [...(ctx.topicNames ?? []), match.topicName],
+            },
+          }).where(eq(markets.id, m.id));
+          topicLinked++;
+        } else {
+          inngestEvents.push({
+            name: 'topics/suggest.requested',
+            data: {
+              description: `${m.title}. ${m.description.slice(0, 300)}`,
+              marketId: m.id,
+            },
+          });
+          topicResearchDispatched++;
+        }
       }
-    }
 
-    if (inngestEvents.length > 0) {
-      await inngest.send(inngestEvents);
+      if (inngestEvents.length > 0) {
+        await inngest.send(inngestEvents);
+      }
     }
   }
 
-  // Phase 4: Trigger resolution checks for closed markets
-  if (closedMarketIds.length > 0) {
+  // Phase 4: Trigger resolution checks for closed markets (mainnet only)
+  if (!isTestnet(chainId) && closedMarketIds.length > 0) {
     await inngest.send(
       closedMarketIds.map((id) => ({
         name: 'markets/resolution.check' as const,

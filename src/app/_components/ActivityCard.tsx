@@ -33,6 +33,10 @@ const ACTION_BADGE: Record<string, { label: string; className: string }> = {
   market_approved: { label: 'Aprobado', className: 'bg-green-100 text-green-700' },
   market_rejected: { label: 'Rechazado', className: 'bg-red-100 text-red-700' },
   market_archived: { label: 'Archivado', className: 'bg-gray-100 text-gray-600' },
+  market_edited: { label: 'Editado', className: 'bg-blue-100 text-blue-700' },
+  market_updated_onchain: { label: 'Actualizado onchain', className: 'bg-indigo-100 text-indigo-700' },
+  market_resolved_onchain: { label: 'Resuelto onchain', className: 'bg-green-100 text-green-700' },
+  market_reported_onchain: { label: 'Reportado onchain', className: 'bg-green-100 text-green-700' },
   signal_updated: { label: 'Señal actualizada', className: 'bg-blue-100 text-blue-700' },
   // Rules
   rule_updated: { label: 'Regla actualizada', className: 'bg-red-100 text-red-700' },

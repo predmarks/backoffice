@@ -7,12 +7,19 @@ import { markets, marketEvents, activityLog, topics, topicSignals, signals } fro
 import { eq, asc, desc, inArray } from 'drizzle-orm';
 import type { Market, Iteration, MarketEventType } from '@/db/types';
 import { toDeployableMarket } from '@/lib/export';
+import { getBasescanUrl, getPredmarksUrl } from '@/lib/chains';
+import { REPORTER_ADDRESSES as REPORTER_ADDRESSES_PUBLIC } from '@/lib/contracts';
+import { fetchOnchainMarketData, fetchMarketResult } from '@/lib/onchain';
+import { fetchOnchainMarkets } from '@/lib/indexer';
 import { StatusBadge } from '../../_components/StatusBadge';
 import { TimingSafetyIndicator } from '../../_components/TimingSafetyIndicator';
 import { MarketActions } from './_components/MarketActions';
 
 import { CopyJsonButton } from './_components/CopyJsonButton';
+import { OnchainActionsWrapper as OnchainActions } from './_components/OnchainActionsWrapper';
+import { ResolveOnchainButton } from './_components/ResolveOnchainButton';
 import { Markdown } from '../../../_components/Markdown';
+
 import { ActivityCard } from '@/app/_components/ActivityCard';
 import { CitedText } from '@/app/_components/CitedText';
 import { EditableField } from '@/app/_components/EditableField';
@@ -57,8 +64,67 @@ export default async function MarketDetailPage({ params }: Props) {
 
   if (!market) notFound();
 
+  // Fetch onchain data and sync market status/fields on every page load
+  let onchainData: { name: string; description: string; category: string; outcomes: string[]; endTimestamp: number; marketAddress: string } | null = null;
+  if (market.onchainId) {
+    try {
+      const [data, indexerMarkets] = await Promise.all([
+        fetchOnchainMarketData(Number(market.onchainId), market.chainId),
+        fetchOnchainMarkets(market.chainId, { where: { onchainId: market.onchainId } }).catch(() => []),
+      ]);
+
+      onchainData = {
+        name: data.name,
+        description: data.description,
+        category: data.category,
+        outcomes: data.outcomes,
+        endTimestamp: data.endTimestamp,
+        marketAddress: data.marketAddress,
+      };
+
+      // Compute correct status from onchain state
+      const now = Math.floor(Date.now() / 1000);
+      let resolvedTo = indexerMarkets.find((m) => m.onchainId === market.onchainId)?.resolvedTo ?? 0;
+      // Fallback: check contract directly if indexer is behind
+      if (resolvedTo === 0 && data.marketAddress && data.marketAddress !== '0x0000000000000000000000000000000000000000') {
+        try {
+          resolvedTo = await fetchMarketResult(data.marketAddress as `0x${string}`, market.chainId);
+        } catch { /* contract read failed */ }
+      }
+      const correctStatus = resolvedTo > 0 ? 'closed'
+        : data.endTimestamp && now > data.endTimestamp ? 'in_resolution'
+        : 'open';
+
+      // Only sync status-related fields from onchain (not content — that's the editable draft)
+      const dbUpdates: Record<string, unknown> = {};
+      if (market.status !== 'rejected' && market.status !== correctStatus) dbUpdates.status = correctStatus;
+      if (resolvedTo > 0 && !market.outcome && data.outcomes.length >= resolvedTo) {
+        dbUpdates.outcome = data.outcomes[resolvedTo - 1];
+        dbUpdates.resolvedAt = new Date();
+      }
+      // Record when onchain resolution is first detected
+      const resObj = (market.resolution as Record<string, unknown> | null) ?? {};
+      if (resolvedTo > 0 && !resObj.resolvedOnchainAt) {
+        dbUpdates.resolution = { ...resObj, resolvedOnchainAt: new Date().toISOString() };
+      }
+
+      // Apply to local object for rendering + fire-and-forget DB update
+      if (Object.keys(dbUpdates).length > 0) {
+        Object.assign(market, dbUpdates);
+        await db.update(markets).set(dbUpdates).where(eq(markets.id, id));
+      }
+    } catch { /* RPC/indexer failure — use DB data as-is */ }
+  } else {
+    // Non-onchain markets: still correct status from endTimestamp
+    const now = Math.floor(Date.now() / 1000);
+    if (market.status === 'open' && market.endTimestamp && now > market.endTimestamp) {
+      market.status = 'in_resolution';
+      await db.update(markets).set({ status: 'in_resolution' }).where(eq(markets.id, id));
+    }
+  }
+
   const deployable = toDeployableMarket(market as unknown as Market);
-  const isEditable = ['candidate', 'open'].includes(market.status);
+  const isEditable = !['closed', 'rejected'].includes(market.status);
   const review = market.review as Market['review'];
   const resolution = market.resolution as Market['resolution'];
   const sourceContext = market.sourceContext as Market['sourceContext'];
@@ -118,93 +184,135 @@ export default async function MarketDetailPage({ params }: Props) {
 
       <div className="max-w-3xl">
 
-      {/* Resolution Suggestion — top of page */}
-      {resolution && !market.outcome && (
-        <div className={`mb-6 rounded-lg border p-6 ${
-          resolution.suggestedOutcome
-            ? 'bg-amber-50 border-amber-300'
-            : 'bg-white border-gray-200'
-        }`}>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-bold">Resolución sugerida</h2>
-            <div className="flex items-center gap-2">
-              {resolution.flaggedAt && (
-                <span className="text-[10px] text-gray-400">
-                  {new Intl.DateTimeFormat('es-AR', {
-                    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-                    timeZone: tz,
-                  }).format(new Date(resolution.flaggedAt))}
-                </span>
-              )}
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+      {/* Resolution — unified stepper */}
+      {resolution && (() => {
+        const hasReporter = !!REPORTER_ADDRESSES_PUBLIC[market.chainId];
+        const reporterDone = activity.some((a) => a.action === 'market_reported_onchain');
+        const step1 = !!resolution.suggestedOutcome;
+        const step2 = !!resolution.confirmedAt;
+        const step3 = market.status === 'closed';
+        const step4 = step3 && reporterDone;
+        const hasMarketAddress = market.onchainId && onchainData?.marketAddress && onchainData.marketAddress !== '0x0000000000000000000000000000000000000000';
+
+        // Extract tx hashes from activity log
+        const basescanBase = getBasescanUrl(market.chainId);
+        const resolveTxHash = (activity.find((a) => a.action === 'market_resolved_onchain')?.detail as Record<string, unknown> | null)?.txHash as string | undefined;
+        const reportTxHash = (activity.find((a) => a.action === 'market_reported_onchain')?.detail as Record<string, unknown> | null)?.txHash as string | undefined;
+
+        const steps = [
+          { label: 'Sugerida', done: step1, txHash: undefined as string | undefined },
+          { label: 'Confirmada', done: step2, txHash: undefined as string | undefined },
+          { label: 'Resuelta onchain', done: step3, txHash: resolveTxHash },
+          ...(hasReporter ? [{ label: 'Reportada', done: step4, txHash: reportTxHash }] : []),
+        ];
+
+        const allDone = steps.every((s) => s.done);
+        const borderColor = allDone ? 'border-green-200' : 'border-amber-200';
+        const bgColor = allDone ? 'bg-green-50' : 'bg-amber-50';
+
+        return (
+          <div className={`mb-6 rounded-lg border p-6 ${bgColor} ${borderColor}`}>
+            {/* Stepper */}
+            <div className="flex items-center gap-1 mb-4">
+              {steps.map((s, i) => (
+                <div key={s.label} className="flex items-center gap-1">
+                  {i > 0 && <div className={`w-4 h-px ${s.done ? 'bg-green-300' : 'bg-gray-300'}`} />}
+                  <div className="flex items-center gap-1.5">
+                    <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold ${
+                      s.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
+                    }`}>
+                      {s.done ? '\u2713' : i + 1}
+                    </span>
+                    {s.txHash ? (
+                      <a
+                        href={`${basescanBase}/tx/${s.txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`text-[10px] font-medium hover:underline ${s.done ? 'text-green-700' : 'text-gray-500'}`}
+                      >
+                        {s.label}
+                      </a>
+                    ) : (
+                      <span className={`text-[10px] font-medium ${s.done ? 'text-green-700' : 'text-gray-500'}`}>
+                        {s.label}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Outcome + confidence */}
+            <div className="flex items-center gap-3 mb-2">
+              <span className="text-lg font-bold">
+                {resolution.suggestedOutcome ?? market.outcome}
+              </span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
                 resolution.confidence === 'high' ? 'bg-green-100 text-green-700' :
                 resolution.confidence === 'medium' ? 'bg-yellow-100 text-yellow-700' :
                 'bg-gray-100 text-gray-500'
               }`}>
-                {resolution.confidence === 'high' ? 'Alta confianza' :
-                 resolution.confidence === 'medium' ? 'Confianza media' : 'Baja confianza'}
+                {resolution.confidence === 'high' ? 'Alta' :
+                 resolution.confidence === 'medium' ? 'Media' : 'Baja'}
               </span>
-            </div>
-          </div>
-
-          {market.status === 'open' && resolution.suggestedOutcome && (
-            <div className="bg-amber-100 border border-amber-200 rounded-md px-3 py-2 mb-3 text-sm text-amber-800">
-              El mercado sigue abierto y hay evidencia de resolución.
-            </div>
-          )}
-
-          {resolution.suggestedOutcome && (
-            <div className="mb-3">
-              <span className="text-sm text-gray-500">Resultado:</span>{' '}
-              <span className="text-lg font-bold">{resolution.suggestedOutcome}</span>
-            </div>
-          )}
-
-          <p className="text-sm text-gray-700 mb-3"><CitedText>{resolution.evidence}</CitedText></p>
-
-          {resolution.evidenceUrls && resolution.evidenceUrls.length > 0 && (
-            <div className="mb-3">
-              <a href={resolution.evidenceUrls[0]} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">
-                {new URL(resolution.evidenceUrls[0]).hostname.replace('www.', '')}
-              </a>
-              {resolution.evidenceUrls.length > 1 && (
-                <div className="mt-1 space-y-0.5">
-                  {resolution.evidenceUrls.slice(1).map((url, i) => (
-                    <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="block text-[11px] text-gray-400 hover:text-blue-600 hover:underline truncate">
-                      {url}
-                    </a>
-                  ))}
-                </div>
+              {resolution.confirmedAt && (
+                <span className="text-[10px] text-gray-400">
+                  {new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: tz }).format(new Date(resolution.confirmedAt))}
+                </span>
               )}
             </div>
-          )}
 
-          {resolution.suggestedOutcome && !resolution.confirmedAt && (
-            <div className="flex items-center gap-2 pt-2 border-t border-gray-200">
-              <ResolutionConfirmButton marketId={market.id} outcome={resolution.suggestedOutcome} />
-              <ResolutionFeedbackButton marketId={market.id} />
-            </div>
-          )}
-        </div>
-      )}
+            {/* Evidence */}
+            <p className="text-sm text-gray-700 mb-3"><CitedText>{resolution.evidence}</CitedText></p>
 
-      {/* Resolution (confirmed) */}
-      {resolution && market.outcome && (
-        <div className="mb-6 bg-green-50 rounded-lg border border-green-200 p-6">
-          <div className="flex items-center gap-3">
-            <span className="text-lg font-bold">Resuelto: {market.outcome}</span>
-            {resolution.confirmedAt && (
-              <span className="text-xs text-gray-400">
-                {new Intl.DateTimeFormat('es-AR', {
-                  day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-                  timeZone: tz,
-                }).format(new Date(resolution.confirmedAt))}
-              </span>
+            {resolution.evidenceUrls && resolution.evidenceUrls.length > 0 && (
+              <div className="mb-3">
+                {resolution.evidenceUrls.map((url, i) => (
+                  <a key={i} href={url} target="_blank" rel="noopener noreferrer" className={`block ${i === 0 ? 'text-sm text-blue-600' : 'text-[11px] text-gray-400'} hover:underline truncate`}>
+                    {(() => { try { return new URL(url).hostname.replace('www.', ''); } catch { return url; } })()}
+                  </a>
+                ))}
+              </div>
+            )}
+
+            {/* Action for current step */}
+            {!step2 && resolution.suggestedOutcome && (
+              <div className="flex items-center gap-2 pt-3 border-t border-gray-200">
+                <ResolutionConfirmButton marketId={market.id} outcome={resolution.suggestedOutcome} />
+                <ResolutionFeedbackButton marketId={market.id} />
+              </div>
+            )}
+
+            {step2 && !step3 && hasMarketAddress && (
+              <div className="pt-3 border-t border-gray-200">
+                <ResolveOnchainButton
+                  marketId={market.id}
+                  onchainId={Number(market.onchainId)}
+                  outcome={market.outcome!}
+                  outcomes={(market.outcomes as string[]) ?? ['Si', 'No']}
+                  marketAddress={onchainData!.marketAddress as `0x${string}`}
+                />
+              </div>
+            )}
+
+            {step3 && hasReporter && !reporterDone && hasMarketAddress && (
+              <div className="pt-3 border-t border-orange-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs text-orange-700 font-medium">Reporter TX pendiente</span>
+                </div>
+                <ResolveOnchainButton
+                  marketId={market.id}
+                  onchainId={Number(market.onchainId)}
+                  outcome={market.outcome!}
+                  outcomes={(market.outcomes as string[]) ?? ['Si', 'No']}
+                  marketAddress={onchainData!.marketAddress as `0x${string}`}
+                  reportOnly
+                />
+              </div>
             )}
           </div>
-          <p className="text-sm text-gray-700 mt-1"><CitedText>{resolution.evidence}</CitedText></p>
-        </div>
-      )}
+        );
+      })()}
 
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-start justify-between gap-4 mb-4">
@@ -254,11 +362,16 @@ export default async function MarketDetailPage({ params }: Props) {
         {market.onchainId && (
           <div className="mb-4 rounded-md bg-gray-50 border border-gray-200 px-4 py-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">On-chain</span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">On-chain</span>
+                {onchainData && JSON.stringify({ t: market.title, d: market.description, c: market.category, o: market.outcomes, e: market.endTimestamp }) === JSON.stringify({ t: onchainData.name, d: onchainData.description, c: onchainData.category, o: onchainData.outcomes, e: onchainData.endTimestamp }) && (
+                  <span className="text-xs text-green-600">En sync</span>
+                )}
+              </div>
               <div className="flex items-center gap-3">
                 {market.onchainAddress && (
                   <a
-                    href={`https://basescan.org/address/${market.onchainAddress}`}
+                    href={`${getBasescanUrl(market.chainId)}/address/${market.onchainAddress}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-xs text-blue-600 hover:underline"
@@ -267,7 +380,7 @@ export default async function MarketDetailPage({ params }: Props) {
                   </a>
                 )}
                 <a
-                  href={`https://predmarks.com/mercados/${market.onchainId}`}
+                  href={`${getPredmarksUrl(market.chainId)}/mercados/${market.onchainId}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs text-blue-600 hover:underline"
@@ -295,6 +408,20 @@ export default async function MarketDetailPage({ params }: Props) {
               )}
             </div>
           </div>
+        )}
+
+        {/* Diff card: local vs onchain */}
+        {market.onchainId && (
+          <OnchainActions
+            marketId={market.id}
+            onchainId={Number(market.onchainId)}
+            title={market.title}
+            description={market.description}
+            category={market.category}
+            outcomes={(market.outcomes as string[]) ?? ['Si', 'No']}
+            endTimestamp={market.endTimestamp}
+            onchainData={onchainData}
+          />
         )}
 
         <details open className="group">
@@ -442,38 +569,46 @@ export default async function MarketDetailPage({ params }: Props) {
       )}
 
       {/* Activity Timeline */}
-      {(events.length > 0 || activity.length > 0) && (
-        <details className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
-          <summary className="text-lg font-bold cursor-pointer list-none">Actividad</summary>
-          <div className="mt-4"></div>
-          {events.length > 0 && (
-            <ul className="border-l-2 border-gray-200 ml-2 space-y-0">
-              {events.map((event) => (
-                <li key={event.id} className="relative pl-5 py-1.5">
-                  <span className="absolute -left-[5px] top-2.5 w-2 h-2 rounded-full bg-gray-400" />
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-xs text-gray-400 shrink-0 font-mono">
-                      {formatEventTime(event.createdAt, tz)}
-                    </span>
-                    <span className="text-sm text-gray-700">
-                      {formatEvent(event.type as MarketEventType, event.iteration, event.detail as Record<string, unknown> | null)}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-          {activity.length > 0 && (
-            <div className={`divide-y divide-gray-50 ${events.length > 0 ? 'mt-4 pt-4 border-t border-gray-100' : ''}`}>
-              {activity.map((entry) => (
-                <div key={entry.id} className="px-0 py-2">
-                  <ActivityCard entry={{ ...entry, detail: entry.detail as Record<string, unknown> | null, createdAt: entry.createdAt.toISOString() }} />
-                </div>
-              ))}
+      {(() => {
+        // Merge market events + activity log into unified timeline
+        type TimelineEntry = { id: string; time: Date; source: 'event' | 'activity'; event?: typeof events[0]; activity?: typeof activity[0] };
+        const timeline: TimelineEntry[] = [
+          ...events.map((e) => ({ id: `ev-${e.id}`, time: e.createdAt, source: 'event' as const, event: e })),
+          ...activity.map((a) => ({ id: `act-${a.id}`, time: a.createdAt, source: 'activity' as const, activity: a })),
+        ].sort((a, b) => b.time.getTime() - a.time.getTime());
+
+        if (timeline.length === 0) return null;
+
+        return (
+          <details className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
+            <summary className="text-lg font-bold cursor-pointer list-none">Actividad</summary>
+            <div className="mt-4">
+              <ul className="border-l-2 border-gray-200 ml-2 space-y-0">
+                {timeline.map((entry) => (
+                  <li key={entry.id} className="relative pl-5 py-1.5">
+                    <span className="absolute -left-[5px] top-2.5 w-2 h-2 rounded-full bg-gray-400" />
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-xs text-gray-400 shrink-0 font-mono">
+                        {formatEventTime(entry.time, tz)}
+                      </span>
+                      {entry.source === 'event' && entry.event && (
+                        <span className="text-sm text-gray-700">
+                          {formatEvent(entry.event.type as MarketEventType, entry.event.iteration, entry.event.detail as Record<string, unknown> | null)}
+                        </span>
+                      )}
+                      {entry.source === 'activity' && entry.activity && (
+                        <div className="flex-1 -mt-0.5">
+                          <ActivityCard entry={{ ...entry.activity, detail: entry.activity.detail as Record<string, unknown> | null, createdAt: entry.activity.createdAt.toISOString() }} />
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
-          )}
-        </details>
-      )}
+          </details>
+        );
+      })()}
 
       {/* Review Section */}
       {review && (

@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { validateChainId, MAINNET_CHAIN_ID } from '@/lib/chains';
 
 interface MarketEntry {
   id: string;
@@ -97,7 +99,9 @@ function ScoreBadge({ score }: { score: number }) {
 }
 
 export default function MercadosPage() {
-  const router = useRouter();
+  const searchParams = useSearchParams();
+  const chainId = validateChainId(Number(searchParams.get('chain')) || undefined);
+  const isTestnet = chainId !== MAINNET_CHAIN_ID;
   const [markets, setMarkets] = useState<MarketEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
@@ -106,10 +110,12 @@ export default function MercadosPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ created: number; updated: number } | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const res = await fetch('/api/monitoring/activity');
+      const res = await fetch(`/api/monitoring/activity?chain=${chainId}`);
       if (res.ok) {
         const json = await res.json();
         setMarkets(json.markets ?? []);
@@ -119,11 +125,30 @@ export default function MercadosPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [chainId]);
 
   useEffect(() => {
     fetchAll();
-  }, [fetchAll]);
+    // Background: sync fresh indexer data, then refetch
+    setSyncing(true);
+    setSyncResult(null);
+    fetch('/api/sync-stats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chainId }),
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          const result = await res.json();
+          setSyncResult(result);
+          if (result.created > 0 || result.updated > 0) {
+            await fetchAll();
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => setSyncing(false));
+  }, [fetchAll, chainId]);
 
   // Compute counts per filter
   const filterCounts: Record<string, number> = {};
@@ -209,7 +234,22 @@ export default function MercadosPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Mercados</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">Mercados</h1>
+          {isTestnet && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">Testnet</span>
+          )}
+          {syncing && (
+            <span className="text-xs text-gray-400 animate-pulse">Sincronizando...</span>
+          )}
+          {!syncing && syncResult && (syncResult.created > 0 || syncResult.updated > 0) && (
+            <span className="text-xs text-green-600">
+              {syncResult.created > 0 && `+${syncResult.created} nuevos`}
+              {syncResult.created > 0 && syncResult.updated > 0 && ', '}
+              {syncResult.updated > 0 && `${syncResult.updated} actualizados`}
+            </span>
+          )}
+        </div>
         {selectableMarkets.length > 0 && (
           <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
             <input
@@ -301,10 +341,10 @@ export default function MercadosPage() {
           const isSelected = selectedIds.has(m.id);
 
           return (
-            <div
+            <Link
               key={m.id}
-              onClick={() => router.push(`/dashboard/markets/${m.id}`)}
-              className={`border rounded-lg cursor-pointer hover:border-gray-400 transition-colors ${
+              href={`/dashboard/markets/${m.id}`}
+              className={`block border rounded-lg cursor-pointer hover:border-gray-400 transition-colors ${
                 isSelected
                   ? 'border-blue-400 ring-1 ring-blue-200 bg-white'
                   : m.status === 'in_resolution'
@@ -410,7 +450,7 @@ export default function MercadosPage() {
                   )}
                 </div>
               </div>
-            </div>
+            </Link>
           );
         })}
       </div>

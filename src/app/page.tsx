@@ -4,8 +4,12 @@ import { db } from '@/db/client';
 import { markets } from '@/db/schema';
 import { eq, and, desc, inArray } from 'drizzle-orm';
 import { MarketList } from './_components/MarketList';
+import { validateChainId } from '@/lib/chains';
 
-export default async function HomePage() {
+export default async function HomePage({ searchParams }: { searchParams: Promise<{ chain?: string }> }) {
+  const params = await searchParams;
+  const chainId = validateChainId(params.chain ? Number(params.chain) : undefined);
+
   const allMarkets = await db
     .select()
     .from(markets)
@@ -13,6 +17,7 @@ export default async function HomePage() {
       and(
         inArray(markets.status, ['open', 'in_resolution']),
         eq(markets.isArchived, false),
+        eq(markets.chainId, chainId),
       ),
     )
     .orderBy(desc(markets.createdAt));
@@ -31,7 +36,7 @@ export default async function HomePage() {
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4">
-      <MarketList markets={serialized} />
+      <MarketList markets={serialized} chainId={chainId} />
     </div>
   );
 }

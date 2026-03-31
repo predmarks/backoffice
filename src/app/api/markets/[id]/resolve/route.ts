@@ -51,7 +51,6 @@ export async function POST(
   const [updated] = await db
     .update(markets)
     .set({
-      status: 'closed',
       outcome,
       resolvedAt: now,
       resolution,
@@ -59,7 +58,7 @@ export async function POST(
     .where(eq(markets.id, id))
     .returning();
 
-  await logMarketEvent(id, 'status_changed', { detail: { from: market.status, to: 'closed', outcome, confirmedBy: resolution.confirmedBy } });
+  await logMarketEvent(id, 'status_changed', { detail: { outcome, confirmedBy: resolution.confirmedBy, note: 'pending onchain confirmation' } });
   await logActivity('resolution_confirmed', {
     entityType: 'market',
     entityId: id,

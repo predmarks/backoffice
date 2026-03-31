@@ -152,18 +152,45 @@ export function MiniChat() {
     }
   }, [pathname]);
 
-  const fetchConversations = useCallback(async () => {
+  const [hasMoreConvs, setHasMoreConvs] = useState(false);
+  const [totalConvs, setTotalConvs] = useState(0);
+  const [convsOffset, setConvsOffset] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const CONVS_PAGE_SIZE = 10;
+
+  const fetchConversations = useCallback(async (offset = 0, append = false) => {
     try {
-      const res = await fetch('/api/chat');
+      const res = await fetch(`/api/chat?limit=${CONVS_PAGE_SIZE}&offset=${offset}`);
       if (res.ok) {
         const data = await res.json();
-        setConversations(data.conversations ?? []);
+        const newConvs = data.conversations ?? [];
+        setConversations((prev) => append ? [...prev, ...newConvs] : newConvs);
+        setHasMoreConvs(data.hasMore ?? false);
+        setTotalConvs(data.total ?? 0);
+        setConvsOffset(offset + newConvs.length);
       }
     } catch { /* ignore */ }
   }, []);
 
+  const loadMoreConversations = useCallback(async () => {
+    if (loadingMore || !hasMoreConvs) return;
+    setLoadingMore(true);
+    await fetchConversations(convsOffset, true);
+    setLoadingMore(false);
+  }, [loadingMore, hasMoreConvs, convsOffset, fetchConversations]);
+
+  const handleConvListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 20) {
+      loadMoreConversations();
+    }
+  }, [loadMoreConversations]);
+
   useEffect(() => {
-    if (open) fetchConversations();
+    if (open) {
+      setConvsOffset(0);
+      fetchConversations(0, false);
+    }
   }, [open, pathname, fetchConversations]);
 
   useEffect(() => {
@@ -372,10 +399,10 @@ export function MiniChat() {
             onClick={() => setChatListOpen(!chatListOpen)}
             className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] text-gray-500 hover:text-gray-700 cursor-pointer"
           >
-            <span>{conversations.length} conversación{conversations.length !== 1 ? 'es' : ''}</span>
+            <span>{totalConvs} conversación{totalConvs !== 1 ? 'es' : ''}</span>
             <span>{chatListOpen ? '\u25B2' : '\u25BC'}</span>
           </button>
-          {chatListOpen && <div className="px-2 pb-2 max-h-36 overflow-y-auto bg-gray-50">
+          {chatListOpen && <div className="px-2 pb-2 max-h-36 overflow-y-auto bg-gray-50" onScroll={handleConvListScroll}>
           {conversations.map((conv) => (
             <div key={conv.id} className="flex items-center gap-1">
               <button
@@ -398,6 +425,9 @@ export function MiniChat() {
               </button>
             </div>
           ))}
+          {loadingMore && (
+            <p className="text-center text-[10px] text-gray-400 py-1">Cargando...</p>
+          )}
           </div>}
         </div>
       )}

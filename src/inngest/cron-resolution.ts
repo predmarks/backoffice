@@ -1,7 +1,8 @@
 import { inngest } from './client';
 import { db } from '@/db/client';
 import { markets } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
+import { MAINNET_CHAIN_ID } from '@/lib/chains';
 
 export const cronResolution = inngest.createFunction(
   { id: 'cron-resolution-check' },
@@ -15,17 +16,17 @@ export const cronResolution = inngest.createFunction(
       const openMarkets = await db
         .select({ id: markets.id, endTimestamp: markets.endTimestamp })
         .from(markets)
-        .where(eq(markets.status, 'open'));
+        .where(and(eq(markets.status, 'open'), eq(markets.chainId, MAINNET_CHAIN_ID)));
 
       const nearDeadline = openMarkets
         .filter((m) => m.endTimestamp <= in72h)
         .map((m) => m.id);
 
-      // In-resolution markets without a resolution suggestion yet
+      // In-resolution markets without a resolution suggestion yet (mainnet only)
       const inResolution = await db
         .select({ id: markets.id })
         .from(markets)
-        .where(eq(markets.status, 'in_resolution'));
+        .where(and(eq(markets.status, 'in_resolution'), eq(markets.chainId, MAINNET_CHAIN_ID)));
 
       const needsCheck = inResolution
         .map((m) => m.id);

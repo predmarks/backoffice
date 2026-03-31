@@ -2,13 +2,16 @@ export const dynamic = 'force-dynamic';
 
 import { getMarketAnalytics, formatVolume } from '@/lib/analytics';
 import { getUserTimezone } from '@/lib/timezone';
+import { validateChainId } from '@/lib/chains';
 import { VolumeOverTimeChart, ParticipantTrendChart } from './_components/Charts';
 
-export default async function AnalyticsPage() {
+export default async function AnalyticsPage({ searchParams }: { searchParams: Promise<{ chain?: string }> }) {
+  const params = await searchParams;
+  const chainId = validateChainId(params.chain ? Number(params.chain) : undefined);
   const tz = await getUserTimezone();
   let data;
   try {
-    data = await getMarketAnalytics(tz);
+    data = await getMarketAnalytics(tz, chainId);
   } catch {
     return (
       <div className="space-y-6">

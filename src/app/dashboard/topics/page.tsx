@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 interface TopicData {
@@ -29,7 +28,7 @@ function formatDate(dateStr: string): string {
 }
 
 export default function TopicsPage() {
-  const router = useRouter();
+
   const [topics, setTopics] = useState<TopicData[]>([]);
   const [loading, setLoading] = useState(true);
   const [dismissing, setDismissing] = useState<string | null>(null);
@@ -339,10 +338,11 @@ export default function TopicsPage() {
           const isExpanded = expandedIds.has(t.id);
 
           return (
-            <div
+            <Link
               key={t.id}
-              onClick={() => !isResearching && router.push(`/dashboard/topics/${t.slug}`)}
-              className={`bg-white border rounded-lg ${!isResearching ? 'cursor-pointer hover:border-gray-400 transition-colors' : ''} ${
+              href={`/dashboard/topics/${t.slug}`}
+              onClick={isResearching ? (e: React.MouseEvent) => e.preventDefault() : undefined}
+              className={`block bg-white border rounded-lg ${!isResearching ? 'cursor-pointer hover:border-gray-400 transition-colors' : ''} ${
                 isResearching
                   ? 'border-purple-300 bg-purple-50/30'
                   : isSelected
@@ -505,7 +505,7 @@ export default function TopicsPage() {
                   </div>
                 </div>
               )}
-            </div>
+            </Link>
           );
         })}
       </div>

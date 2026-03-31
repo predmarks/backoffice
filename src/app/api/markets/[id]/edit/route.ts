@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { markets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { logMarketEvent } from '@/lib/market-events';
+import { logActivity } from '@/lib/activity-log';
 
 export async function POST(
   request: NextRequest,
@@ -15,10 +15,10 @@ export async function POST(
     return NextResponse.json({ error: 'Market not found' }, { status: 404 });
   }
 
-  const editable = ['candidate', 'open'];
-  if (!editable.includes(market.status)) {
+  const nonEditable = ['closed', 'rejected'];
+  if (nonEditable.includes(market.status)) {
     return NextResponse.json(
-      { error: `Cannot edit a market with status "${market.status}". Must be one of: ${editable.join(', ')}.` },
+      { error: `Cannot edit a market with status "${market.status}".` },
       { status: 400 },
     );
   }
@@ -39,9 +39,12 @@ export async function POST(
   ];
 
   const updates: Record<string, unknown> = {};
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
   for (const key of allowedFields) {
     if (body[key] !== undefined) {
+      const oldVal = (market as Record<string, unknown>)[key];
       updates[key] = body[key];
+      changes[key] = { from: oldVal, to: body[key] };
     }
   }
 
@@ -51,8 +54,12 @@ export async function POST(
     .where(eq(markets.id, id))
     .returning();
 
-  await logMarketEvent(id, 'human_edited', {
-    detail: { fields: Object.keys(updates) },
+  await logActivity('market_edited', {
+    entityType: 'market',
+    entityId: id,
+    entityLabel: updated.title,
+    detail: changes,
+    source: 'ui',
   });
 
   return NextResponse.json(updated);

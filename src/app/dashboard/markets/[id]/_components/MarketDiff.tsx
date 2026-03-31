@@ -1,0 +1,322 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useChainId } from 'wagmi';
+import { zeroAddress } from 'viem';
+import { PRECOG_MASTER_ABI, MASTER_ADDRESSES } from '@/lib/contracts';
+import { getBasescanUrl } from '@/lib/chains';
+import { CopyJsonButton } from './CopyJsonButton';
+
+interface OnchainData {
+  name: string;
+  description: string;
+  category: string;
+  outcomes: string[];
+  endTimestamp: number;
+}
+
+interface Props {
+  marketId: string;
+  onchainId: number;
+  title: string;
+  description: string;
+  category: string;
+  outcomes: string[];
+  endTimestamp: number;
+  onchainData: OnchainData | null;
+}
+
+// --- Word-level diff ---
+
+type DiffSegment = { type: 'equal' | 'add' | 'remove'; text: string };
+
+function wordDiff(a: string, b: string): DiffSegment[] {
+  const wordsA = a.split(/(\s+)/);
+  const wordsB = b.split(/(\s+)/);
+
+  // Simple LCS-based diff
+  const m = wordsA.length;
+  const n = wordsB.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = wordsA[i - 1] === wordsB[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+
+  const segments: DiffSegment[] = [];
+  let i = m, j = n;
+  const raw: DiffSegment[] = [];
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && wordsA[i - 1] === wordsB[j - 1]) {
+      raw.push({ type: 'equal', text: wordsA[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      raw.push({ type: 'add', text: wordsB[j - 1] });
+      j--;
+    } else {
+      raw.push({ type: 'remove', text: wordsA[i - 1] });
+      i--;
+    }
+  }
+
+  raw.reverse();
+
+  // Merge consecutive segments of the same type
+  for (const seg of raw) {
+    const last = segments[segments.length - 1];
+    if (last && last.type === seg.type) {
+      last.text += seg.text;
+    } else {
+      segments.push({ ...seg });
+    }
+  }
+
+  return segments;
+}
+
+function DiffTextAdded({ a, b }: { a: string; b: string }) {
+  const segments = wordDiff(a, b);
+  return (
+    <span className="text-sm leading-relaxed">
+      {segments.map((seg, i) => {
+        if (seg.type === 'equal') return <span key={i} className="text-gray-700">{seg.text}</span>;
+        if (seg.type === 'add') return <span key={i} className="bg-green-100 text-green-700">{seg.text}</span>;
+        return null; // hide removed in the "new" side
+      })}
+    </span>
+  );
+}
+
+function DiffTextRemoved({ a, b }: { a: string; b: string }) {
+  const segments = wordDiff(a, b);
+  return (
+    <span className="text-sm leading-relaxed">
+      {segments.map((seg, i) => {
+        if (seg.type === 'equal') return <span key={i} className="text-gray-700">{seg.text}</span>;
+        if (seg.type === 'remove') return <span key={i} className="bg-red-100 text-red-700 line-through">{seg.text}</span>;
+        return null; // hide added in the "old" side
+      })}
+    </span>
+  );
+}
+
+// --- Diff computation ---
+
+interface FieldDiff {
+  label: string;
+  local: string;
+  chain: string;
+  isText: boolean; // true = use inline word diff, false = side-by-side
+}
+
+function formatDate(ts: number): string {
+  const d = new Date(ts * 1000);
+  const parts = new Intl.DateTimeFormat('es-AR', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return `${get('day')}/${get('month')}/${get('year')} ${get('hour')}:${get('minute')}`;
+}
+
+function computeDiffs(props: Props): FieldDiff[] {
+  const { onchainData } = props;
+  if (!onchainData) return [];
+
+  const diffs: FieldDiff[] = [];
+
+  if (props.title !== onchainData.name) {
+    diffs.push({ label: 'Titulo', local: props.title, chain: onchainData.name, isText: true });
+  }
+  if (props.description !== onchainData.description) {
+    diffs.push({
+      label: 'Descripcion',
+      local: props.description || '(vacio)',
+      chain: onchainData.description || '(vacio)',
+      isText: true,
+    });
+  }
+  if (props.category !== onchainData.category) {
+    diffs.push({ label: 'Categoria', local: props.category, chain: onchainData.category, isText: false });
+  }
+  if (JSON.stringify(props.outcomes) !== JSON.stringify(onchainData.outcomes)) {
+    diffs.push({
+      label: 'Opciones',
+      local: props.outcomes.join(', '),
+      chain: onchainData.outcomes.join(', '),
+      isText: false,
+    });
+  }
+  if (props.endTimestamp !== onchainData.endTimestamp) {
+    diffs.push({
+      label: 'Fecha de cierre',
+      local: formatDate(props.endTimestamp),
+      chain: formatDate(onchainData.endTimestamp),
+      isText: true,
+    });
+  }
+
+  return diffs;
+}
+
+function buildPatchJson(props: Props, diffs: FieldDiff[]): string {
+  if (diffs.length === 0) return '{}';
+  const patch: Record<string, unknown> = {};
+  for (const d of diffs) {
+    if (d.label === 'Titulo') patch.name = props.title;
+    if (d.label === 'Descripcion') patch.description = props.description;
+    if (d.label === 'Categoria') patch.category = props.category;
+    if (d.label === 'Opciones') patch.outcomes = props.outcomes;
+    if (d.label === 'Fecha de cierre') patch.endTimestamp = props.endTimestamp;
+  }
+  return JSON.stringify({ [String(props.onchainId)]: patch }, null, 4);
+}
+
+// --- Component ---
+
+export function MarketDiff(props: Props) {
+  const router = useRouter();
+  const { isConnected } = useAccount();
+  const chainId = useChainId();
+  const masterAddress = MASTER_ADDRESSES[chainId];
+
+  const { writeContract, data: hash, isPending, error } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+  const [showPreview, setShowPreview] = useState(false);
+
+  useEffect(() => {
+    if (!isSuccess) return;
+    setShowPreview(false);
+    const timer = setTimeout(async () => {
+      // Log the onchain update
+      await fetch(`/api/markets/${props.marketId}/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'market_updated_onchain',
+          detail: { txHash: hash, fields: computeDiffs(props).map((d) => d.label) },
+        }),
+      }).catch(() => {});
+      await fetch(`/api/markets/${props.marketId}/refresh?full=true`, { method: 'POST' });
+      router.refresh();
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [isSuccess, hash, props, router]);
+
+  const diffs = computeDiffs(props);
+
+  if (!isConnected || !masterAddress || diffs.length === 0) return null;
+
+  function handleUpdate() {
+    setShowPreview(false);
+    writeContract({
+      address: masterAddress,
+      abi: PRECOG_MASTER_ABI,
+      functionName: 'updateMarket',
+      args: [
+        BigInt(props.onchainId),
+        props.title,
+        props.description,
+        props.category,
+        props.outcomes,
+        BigInt(0),
+        BigInt(props.endTimestamp),
+        zeroAddress,
+        zeroAddress,
+      ],
+    });
+  }
+
+  const truncate = (s: string, n = 50) => s.length > n ? s.slice(0, n) + '...' : s;
+
+  return (
+    <details className="mb-4 rounded-md border border-amber-200 bg-amber-50/30 group">
+      <summary className="flex items-center justify-between px-4 py-3 cursor-pointer list-none">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-gray-400 group-open:rotate-90 transition-transform">&#9654;</span>
+          <span className="text-xs font-medium text-amber-700 uppercase tracking-wide">Diff Local / Onchain</span>
+          <span className="text-[10px] text-amber-500">{diffs.length} diferencia{diffs.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => isPending || isConfirming ? undefined : showPreview ? handleUpdate() : setShowPreview(true)}
+            disabled={isPending || isConfirming}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 cursor-pointer"
+          >
+            {isPending ? 'Firmando...' : isConfirming ? 'Confirmando...' : 'Update onchain'}
+          </button>
+          {hash && (isPending || isConfirming) && (
+            <a href={`${getBasescanUrl(chainId)}/tx/${hash}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-500 hover:underline font-mono">
+              {hash.slice(0, 10)}...
+            </a>
+          )}
+          {isSuccess && <span className="text-xs text-green-600">Confirmado</span>}
+          {error && <span className="text-xs text-red-500 max-w-xs truncate" title={error.message}>Error</span>}
+        </div>
+      </summary>
+
+      <div className="px-4 pb-3 space-y-3">
+        {/* Tx preview panel */}
+        {showPreview && (
+          <div className="rounded-md border border-gray-200 bg-white p-3 space-y-2">
+            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Verificar transaccion</p>
+            <div className="space-y-1 text-[11px]">
+              <div className="flex justify-between"><span className="text-gray-500">Contrato</span><span className="font-mono text-gray-800">{masterAddress.slice(0, 6)}...{masterAddress.slice(-4)}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Funcion</span><span className="font-mono text-gray-800">updateMarket</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Market ID</span><span className="font-mono text-gray-800">{props.onchainId}</span></div>
+              {diffs.map((d) => (
+                <div key={d.label} className="flex justify-between gap-2"><span className="text-gray-500 shrink-0">{d.label}</span><span className="text-gray-800 text-right truncate">{truncate(d.local)}</span></div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <button onClick={handleUpdate} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 cursor-pointer">Confirmar y firmar</button>
+              <button onClick={() => setShowPreview(false)} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 cursor-pointer">Cancelar</button>
+            </div>
+          </div>
+        )}
+
+        {diffs.map((d) => (
+          <div key={d.label}>
+            <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">{d.label}</span>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              <div className="rounded bg-white border border-blue-100 px-2 py-1.5">
+                <span className="text-[10px] text-blue-400 block mb-0.5">Local</span>
+                {d.isText
+                  ? <DiffTextAdded a={d.chain} b={d.local} />
+                  : <span className="text-sm text-gray-700">{d.local}</span>
+                }
+              </div>
+              <div className="rounded bg-white border border-gray-200 px-2 py-1.5">
+                <span className="text-[10px] text-gray-400 block mb-0.5">Onchain</span>
+                {d.isText
+                  ? <DiffTextRemoved a={d.chain} b={d.local} />
+                  : <span className="text-sm text-gray-700">{d.chain}</span>
+                }
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {/* Patch JSON */}
+        <details open className="group/json">
+          <summary className="text-[10px] text-gray-400 cursor-pointer list-none flex items-center gap-1">
+            <span className="group-open/json:rotate-90 transition-transform">&#9654;</span>
+            Patch JSON
+          </summary>
+          <div className="mt-1 relative">
+            <pre className="text-[11px] bg-gray-50 text-gray-800 border border-gray-200 rounded p-3 overflow-x-auto">{buildPatchJson(props, diffs)}</pre>
+            <div className="absolute top-2 right-2">
+              <CopyJsonButton json={buildPatchJson(props, diffs)} />
+            </div>
+          </div>
+        </details>
+      </div>
+    </details>
+  );
+}

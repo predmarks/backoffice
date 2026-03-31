@@ -98,6 +98,10 @@ export const reviewJob = inngest.createFunction(
         .where(eq(markets.id, marketId));
       if (!m) throw new Error(`Market ${marketId} not found`);
 
+      if (m.chainId !== 8453) {
+        return { market: m, isResume: false, skipped: true as const };
+      }
+
       await db
         .update(markets)
         .set({ status: 'processing' })
@@ -110,8 +114,12 @@ export const reviewJob = inngest.createFunction(
         detail: { existingIterations: existingIterations.length },
       });
 
-      return { market: m, isResume };
+      return { market: m, isResume, skipped: false as const };
     });
+
+    if (initResult.skipped) {
+      return { status: 'skipped', reason: 'testnet market' };
+    }
 
     // Data verification — only on first run (not resume)
     const verification = await step.run('verify-data', async () => {

@@ -44,11 +44,13 @@ export const markets = pgTable(
     onchainAddress: varchar('onchain_address', { length: 42 }),
     volume: varchar('volume', { length: 40 }),
     participants: integer('participants'),
+    chainId: integer('chain_id').notNull().default(8453),
   },
   (table) => [
     index('markets_status_idx').on(table.status),
     index('markets_status_created_idx').on(table.status, table.createdAt),
-    uniqueIndex('markets_onchain_id_idx').on(table.onchainId),
+    uniqueIndex('markets_onchain_id_chain_idx').on(table.onchainId, table.chainId),
+    index('markets_chain_id_idx').on(table.chainId),
   ],
 ).enableRLS();
 

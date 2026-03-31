@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Markdown } from './Markdown';
 
 interface EditableFieldProps {
@@ -22,9 +23,11 @@ export function EditableField({
   displayValue,
   renderMarkdown = false,
 }: EditableFieldProps) {
+  const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [current, setCurrent] = useState(value);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -40,6 +43,7 @@ export function EditableField({
       return;
     }
     setSaving(true);
+    setError(null);
     try {
       let payload: Record<string, unknown> = { [field]: current };
       if (field === 'endTimestamp') {
@@ -50,11 +54,14 @@ export function EditableField({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Save failed');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Save failed');
+      }
       setEditing(false);
-      window.location.reload();
-    } catch {
-      // revert on error
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed');
       setCurrent(value);
       setEditing(false);
     } finally {
@@ -74,17 +81,20 @@ export function EditableField({
 
   if (!editing) {
     return (
-      <div
-        onClick={() => setEditing(true)}
-        className={`cursor-pointer hover:bg-yellow-50 hover:outline hover:outline-1 hover:outline-yellow-300 rounded px-0.5 -mx-0.5 transition-colors ${className}`}
-        title="Click para editar"
-      >
+      <div>
+        {error && <p className="text-xs text-red-500 mb-1">{error}</p>}
+        <div
+          onClick={() => { setError(null); setEditing(true); }}
+          className={`cursor-pointer hover:bg-yellow-50 hover:outline hover:outline-1 hover:outline-yellow-300 rounded px-0.5 -mx-0.5 transition-colors ${className}`}
+          title="Click para editar"
+        >
         {displayValue
           ? <span>{displayValue}</span>
           : current
             ? (renderMarkdown ? <Markdown>{current}</Markdown> : <span>{current}</span>)
             : <span className="text-gray-400 italic">Sin contenido</span>
         }
+        </div>
       </div>
     );
   }

@@ -60,9 +60,21 @@ interface IndexerResponse<T> {
   errors?: { message: string }[];
 }
 
-async function queryIndexer<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-  const url = process.env.INDEXER_URL;
-  if (!url) throw new Error('INDEXER_URL is not set');
+import { MAINNET_CHAIN_ID } from './chains';
+
+function getIndexerUrl(chainId: number): string {
+  if (chainId === MAINNET_CHAIN_ID) {
+    const url = process.env.INDEXER_URL;
+    if (!url) throw new Error('INDEXER_URL is not set');
+    return url;
+  }
+  const url = process.env.INDEXER_URL_SEPOLIA;
+  if (!url) throw new Error('INDEXER_URL_SEPOLIA is not set');
+  return url;
+}
+
+async function queryIndexer<T>(chainId: number, query: string, variables: Record<string, unknown>): Promise<T> {
+  const url = getIndexerUrl(chainId);
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
@@ -99,7 +111,7 @@ interface FetchMarketsOptions {
   orderDirection?: 'asc' | 'desc';
 }
 
-export async function fetchOnchainMarkets(options?: FetchMarketsOptions): Promise<OnchainMarket[]> {
+export async function fetchOnchainMarkets(chainId: number, options?: FetchMarketsOptions): Promise<OnchainMarket[]> {
   const all: OnchainMarket[] = [];
   let skip = 0;
 
@@ -113,7 +125,7 @@ export async function fetchOnchainMarkets(options?: FetchMarketsOptions): Promis
 
   while (true) {
     variables.skip = skip;
-    const { markets } = await queryIndexer<{ markets: RawOnchainMarket[] }>(MARKET_LIST_QUERY, variables);
+    const { markets } = await queryIndexer<{ markets: RawOnchainMarket[] }>(chainId, MARKET_LIST_QUERY, variables);
     all.push(...markets.map(coerceMarket));
     if (markets.length < PAGE_SIZE) break;
     skip += PAGE_SIZE;
@@ -122,8 +134,8 @@ export async function fetchOnchainMarkets(options?: FetchMarketsOptions): Promis
   return all;
 }
 
-export async function fetchOpenOnchainMarkets(): Promise<OnchainMarket[]> {
-  const markets = await fetchOnchainMarkets({
+export async function fetchOpenOnchainMarkets(chainId: number): Promise<OnchainMarket[]> {
+  const markets = await fetchOnchainMarkets(chainId, {
     where: { resolvedTo: 0 },
     orderBy: 'endTimestamp',
     orderDirection: 'asc',
@@ -137,8 +149,8 @@ export async function fetchOpenOnchainMarkets(): Promise<OnchainMarket[]> {
   });
 }
 
-export async function fetchUnresolvedOnchainMarkets(): Promise<OnchainMarket[]> {
-  return fetchOnchainMarkets({
+export async function fetchUnresolvedOnchainMarkets(chainId: number): Promise<OnchainMarket[]> {
+  return fetchOnchainMarkets(chainId, {
     where: { resolvedTo: 0 },
     orderBy: 'endTimestamp',
     orderDirection: 'asc',
