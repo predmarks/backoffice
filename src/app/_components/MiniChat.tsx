@@ -160,7 +160,12 @@ export function MiniChat() {
 
   const fetchConversations = useCallback(async (offset = 0, append = false) => {
     try {
-      const res = await fetch(`/api/chat?limit=${CONVS_PAGE_SIZE}&offset=${offset}`);
+      const params = new URLSearchParams({ limit: String(CONVS_PAGE_SIZE), offset: String(offset) });
+      if (context.type !== 'global' && context.id) {
+        params.set('contextType', context.type);
+        params.set('contextId', context.id);
+      }
+      const res = await fetch(`/api/chat?${params}`);
       if (res.ok) {
         const data = await res.json();
         const newConvs = data.conversations ?? [];
@@ -170,7 +175,7 @@ export function MiniChat() {
         setConvsOffset(offset + newConvs.length);
       }
     } catch { /* ignore */ }
-  }, []);
+  }, [context.type, context.id]);
 
   const loadMoreConversations = useCallback(async () => {
     if (loadingMore || !hasMoreConvs) return;
@@ -269,6 +274,8 @@ export function MiniChat() {
   }
 
   function handleLoadConversation(conv: Conversation) {
+    // Don't load conversations from a different context — prevents operating on wrong entity
+    if (context.id && conv.contextId && conv.contextId !== context.id) return;
     setActiveConvId(conv.id);
     setMessages(conv.messages);
     setError(null);
@@ -393,17 +400,24 @@ export function MiniChat() {
       </div>
 
       {/* Conversation list */}
-      {conversations.length > 0 && (
+      {(() => {
+        // Client-side filter: only show conversations matching current context
+        const filtered = context.id
+          ? conversations.filter((c) => c.contextId === context.id)
+          : conversations;
+        const filteredCount = context.id ? filtered.length : totalConvs;
+        if (filtered.length === 0) return null;
+        return (
         <div className="border-b border-gray-200 bg-gray-50 shrink-0">
           <button
             onClick={() => setChatListOpen(!chatListOpen)}
             className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] text-gray-500 hover:text-gray-700 cursor-pointer"
           >
-            <span>{totalConvs} conversación{totalConvs !== 1 ? 'es' : ''}</span>
+            <span>{filteredCount} conversación{filteredCount !== 1 ? 'es' : ''}</span>
             <span>{chatListOpen ? '\u25B2' : '\u25BC'}</span>
           </button>
           {chatListOpen && <div className="px-2 pb-2 max-h-36 overflow-y-auto bg-gray-50" onScroll={handleConvListScroll}>
-          {conversations.map((conv) => (
+          {filtered.map((conv) => (
             <div key={conv.id} className="flex items-center gap-1">
               <button
                 onClick={() => handleLoadConversation(conv)}
@@ -430,7 +444,8 @@ export function MiniChat() {
           )}
           </div>}
         </div>
-      )}
+        );
+      })()}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">

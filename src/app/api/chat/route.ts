@@ -617,7 +617,8 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   }
 
   if (block.name === 'lookup_market') {
-    const { marketId } = block.input as { marketId: string };
+    const { marketId: providedId } = block.input as { marketId: string };
+    const marketId = (contextType === 'market' && contextId) ? contextId : providedId;
     return await buildMarketContext(marketId, tz);
   }
 
@@ -731,7 +732,8 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   }
 
   if (block.name === 'link_market_topic') {
-    const { marketId, topicId } = block.input as { marketId: string; topicId: string };
+    const { marketId: providedId, topicId } = block.input as { marketId: string; topicId: string };
+    const marketId = (contextType === 'market' && contextId) ? contextId : providedId;
     const [market] = await db.select({ title: markets.title, sourceContext: markets.sourceContext }).from(markets).where(eq(markets.id, marketId));
     if (!market) return 'Mercado no encontrado.';
     const [topic] = await db.select({ name: topics.name }).from(topics).where(eq(topics.id, topicId));
@@ -747,7 +749,8 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   }
 
   if (block.name === 'unlink_market_topic') {
-    const { marketId, topicId } = block.input as { marketId: string; topicId: string };
+    const { marketId: providedId, topicId } = block.input as { marketId: string; topicId: string };
+    const marketId = (contextType === 'market' && contextId) ? contextId : providedId;
     const [market] = await db.select({ title: markets.title, sourceContext: markets.sourceContext }).from(markets).where(eq(markets.id, marketId));
     if (!market) return 'Mercado no encontrado.';
     const [topic] = await db.select({ name: topics.name }).from(topics).where(eq(topics.id, topicId));
@@ -762,7 +765,9 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   }
 
   if (block.name === 'update_market') {
-    const { marketId, ...fields } = block.input as Record<string, unknown>;
+    const { marketId: providedMarketId, ...fields } = block.input as Record<string, unknown>;
+    // Always use the current page's market when on a market page — prevents operating on wrong market
+    const marketId = (contextType === 'market' && contextId) ? contextId : providedMarketId;
     const allowedFields = ['title', 'description', 'resolutionCriteria', 'resolutionSource', 'contingencies', 'category', 'tags', 'outcomes', 'endTimestamp', 'expectedResolutionDate', 'timingSafety', 'status'];
     const updates: Record<string, unknown> = {};
     for (const key of allowedFields) {
@@ -946,7 +951,8 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   }
 
   if (block.name === 'review_market') {
-    const { marketId } = block.input as { marketId: string };
+    const { marketId: providedId } = block.input as { marketId: string };
+    const marketId = (contextType === 'market' && contextId) ? contextId : providedId;
     // Guard: skip if a review was already triggered for this market in the last 10 minutes
     const [recentReview] = await db
       .select({ id: activityLog.id })
@@ -971,7 +977,8 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   }
 
   if (block.name === 'check_resolution') {
-    const { marketId } = block.input as { marketId: string };
+    const { marketId: providedId } = block.input as { marketId: string };
+    const marketId = (contextType === 'market' && contextId) ? contextId : providedId;
     // Guard: skip if a resolution check was already triggered for this market in the last 10 minutes
     const [recent] = await db
       .select({ id: activityLog.id })

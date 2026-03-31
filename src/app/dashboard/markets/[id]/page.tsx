@@ -16,6 +16,7 @@ import { TimingSafetyIndicator } from '../../_components/TimingSafetyIndicator';
 import { MarketActions } from './_components/MarketActions';
 
 import { CopyJsonButton } from './_components/CopyJsonButton';
+import { CheckResolutionTrigger } from './_components/CheckResolutionTrigger';
 import { OnchainActionsWrapper as OnchainActions } from './_components/OnchainActionsWrapper';
 import { ResolveOnchainButton } from './_components/ResolveOnchainButton';
 import { Markdown } from '../../../_components/Markdown';
@@ -183,6 +184,11 @@ export default async function MarketDetailPage({ params }: Props) {
       </div>
 
       <div className="max-w-3xl">
+
+      {/* Auto-trigger resolution check when market is in_resolution but no suggestion yet */}
+      {market.status === 'in_resolution' && (!resolution || !resolution.suggestedOutcome) && (
+        <CheckResolutionTrigger marketId={market.id} />
+      )}
 
       {/* Resolution — unified stepper */}
       {resolution && (() => {
