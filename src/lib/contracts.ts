@@ -199,6 +199,13 @@ export const PRECOG_MARKET_ABI = [
     inputs: [{ name: 'tokenAddress', type: 'address' }],
     outputs: [],
   },
+  {
+    name: 'transferOwnership',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: '_newOwner', type: 'address' }],
+    outputs: [],
+  },
 ] as const;
 
 export const REPORTER_ABI = [

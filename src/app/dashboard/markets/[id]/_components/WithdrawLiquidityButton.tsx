@@ -14,6 +14,7 @@ interface Props {
   marketAddress: `0x${string}`;
   chainId: number;
   withdrawal?: WithdrawalProgress | null;
+  balanceLabel?: string;
 }
 
 type Step =
@@ -21,6 +22,7 @@ type Step =
   | 'checking'
   | 'preview-transfer' | 'transferring' | 'confirming-transfer'
   | 'preview-withdraw' | 'withdrawing' | 'confirming-withdraw'
+  | 'preview-return' | 'returning' | 'confirming-return'
   | 'refreshing' | 'done' | 'error';
 
 function TxLink({ hash, chainId }: { hash: string; chainId: number }) {
@@ -54,7 +56,25 @@ function addr(a: string): string {
   return `${a.slice(0, 6)}...${a.slice(-4)}`;
 }
 
-export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, chainId, withdrawal }: Props) {
+// Derive stepper state from both persisted withdrawal progress and live step
+function getStepperState(step: Step, withdrawal?: WithdrawalProgress | null) {
+  const TRANSFER_ACTIVE_STEPS: Step[] = ['checking', 'preview-transfer', 'transferring', 'confirming-transfer'];
+  const TRANSFER_DONE_STEPS: Step[] = ['preview-withdraw', 'withdrawing', 'confirming-withdraw', 'refreshing', 'done'];
+  const WITHDRAW_ACTIVE_STEPS: Step[] = ['preview-withdraw', 'withdrawing', 'confirming-withdraw'];
+  const WITHDRAW_DONE_STEPS: Step[] = ['refreshing', 'done'];
+
+  const step1Done = !!withdrawal?.ownershipTransferredAt || TRANSFER_DONE_STEPS.includes(step);
+  const step1Active = TRANSFER_ACTIVE_STEPS.includes(step) && !step1Done;
+  const step1Busy = step === 'transferring' || step === 'confirming-transfer' || step === 'checking';
+
+  const step2Done = !!withdrawal?.withdrawnAt || WITHDRAW_DONE_STEPS.includes(step);
+  const step2Active = WITHDRAW_ACTIVE_STEPS.includes(step) && !step2Done;
+  const step2Busy = step === 'withdrawing' || step === 'confirming-withdraw';
+
+  return { step1Done, step1Active, step1Busy, step2Done, step2Active, step2Busy };
+}
+
+export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, chainId, withdrawal, balanceLabel }: Props) {
   const router = useRouter();
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
@@ -65,6 +85,7 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
   const [balance, setBalance] = useState<string | null>(null);
 
   const masterAddress = MASTER_ADDRESSES[chainId];
+  const basescanBase = getBasescanUrl(chainId);
 
   // Auto-resume: if ownership transferred but not withdrawn, go to preview-withdraw
   useEffect(() => {
@@ -177,6 +198,7 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
 
       setTxHash(null);
       setStep('preview-withdraw');
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transaction failed');
       setStep('error');
@@ -206,7 +228,6 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
 
       setStep('refreshing');
       setTxHash(null);
-      await new Promise((r) => setTimeout(r, 2000));
       router.refresh();
       setStep('done');
     } catch (err) {
@@ -221,15 +242,15 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
     setTxHash(null);
 
     try {
-      setStep('transferring');
+      setStep('returning');
       const data = encodeFunctionData({
-        abi: PRECOG_MASTER_ABI,
-        functionName: 'marketTransferOwnership',
-        args: [BigInt(onchainId), masterAddress],
+        abi: PRECOG_MARKET_ABI,
+        functionName: 'transferOwnership',
+        args: [masterAddress],
       });
-      const tx = await sendTx(masterAddress, data, address);
+      const tx = await sendTx(marketAddress, data, address);
       setTxHash(tx);
-      setStep('confirming-transfer');
+      setStep('confirming-return');
       await publicClient.waitForTransactionReceipt({ hash: tx });
       await logTx('market_ownership_returned', {
         txHash: tx,
@@ -238,7 +259,6 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
 
       setTxHash(null);
       setStep('refreshing');
-      await new Promise((r) => setTimeout(r, 2000));
       router.refresh();
       setStep('done');
     } catch (err) {
@@ -247,12 +267,90 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
     }
   }
 
-  const busy = ['checking', 'transferring', 'confirming-transfer', 'withdrawing', 'confirming-withdraw', 'refreshing'].includes(step);
+  const busy = ['checking', 'transferring', 'confirming-transfer', 'withdrawing', 'confirming-withdraw', 'returning', 'confirming-return', 'refreshing'].includes(step);
+  const { step1Done, step1Active, step1Busy, step2Done, step2Active, step2Busy } = getStepperState(step, withdrawal);
+  const allDone = step1Done && step2Done;
+  const alreadyWithdrawn = withdrawal?.withdrawnAt || step === 'done';
+  const showReturnOwnership = withdrawal?.ownershipTransferredAt && !withdrawal?.ownershipReturnedAt;
 
-  // Preview: Transfer ownership
-  if (step === 'preview-transfer') {
-    return (
-      <div className="space-y-3">
+  // Determine which step's tx hash to show inline
+  const transferTxHash = txHash && (step === 'confirming-transfer' || step === 'transferring') ? txHash : withdrawal?.ownershipTransferTxHash;
+  const withdrawTxHash = txHash && (step === 'confirming-withdraw' || step === 'withdrawing') ? txHash : withdrawal?.withdrawTxHash;
+
+  const borderColor = allDone ? 'border-green-200' : 'border-purple-200';
+  const bgColor = allDone ? 'bg-green-50' : 'bg-purple-50';
+
+  // Stepper data
+  const steps = [
+    { label: 'Transferir ownership', done: step1Done, active: step1Active, spinning: step1Busy, hash: transferTxHash },
+    { label: 'Retirar liquidez', done: step2Done, active: step2Active, spinning: step2Busy, hash: withdrawTxHash },
+  ];
+
+  // Button label
+  const label = step === 'checking' ? 'Verificando...'
+    : step === 'transferring' ? 'Firmando...'
+    : step === 'confirming-transfer' ? 'Confirmando transferencia...'
+    : step === 'withdrawing' ? 'Firmando...'
+    : step === 'confirming-withdraw' ? 'Confirmando retiro...'
+    : step === 'returning' ? 'Firmando...'
+    : step === 'confirming-return' ? 'Devolviendo ownership...'
+    : step === 'refreshing' ? 'Actualizando...'
+    : step === 'done' ? 'Liquidez retirada'
+    : step === 'error' ? 'Reintentar'
+    : alreadyWithdrawn ? 'Liquidez retirada'
+    : withdrawal?.ownershipTransferredAt ? 'Continuar retiro'
+    : 'Retirar liquidez';
+
+  return (
+    <div className={`rounded-lg border p-6 ${bgColor} ${borderColor}`}>
+      {/* Stepper */}
+      <div className="flex items-center gap-1 mb-4">
+        {steps.map((s, i) => {
+          const circleClass = s.done
+            ? 'bg-green-500 text-white'
+            : s.active || s.spinning
+              ? 'bg-purple-500 text-white'
+              : 'bg-gray-200 text-gray-500';
+          const labelClass = s.done
+            ? 'text-green-700'
+            : s.active || s.spinning
+              ? 'text-purple-700 font-semibold'
+              : 'text-gray-500';
+          const lineClass = s.done ? 'bg-green-300' : 'bg-gray-300';
+
+          return (
+            <div key={s.label} className="flex items-center gap-1">
+              {i > 0 && <div className={`w-4 h-px ${lineClass}`} />}
+              <div className="flex items-center gap-1.5">
+                <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold ${circleClass}`}>
+                  {s.done ? '\u2713' : s.spinning ? (
+                    <span className="animate-spin inline-block w-2.5 h-2.5 border border-white border-t-transparent rounded-full" />
+                  ) : i + 1}
+                </span>
+                {s.hash ? (
+                  <a
+                    href={`${basescanBase}/tx/${s.hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`text-[10px] font-medium hover:underline ${labelClass}`}
+                  >
+                    {s.label}
+                  </a>
+                ) : (
+                  <span className={`text-[10px] font-medium ${labelClass}`}>
+                    {s.label}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <h3 className="text-sm font-semibold text-gray-700 mb-3">Retiro de liquidez{balanceLabel ? ` — ${balanceLabel}` : ''}</h3>
+
+      {/* Preview: Transfer ownership */}
+      {step === 'preview-transfer' && (
         <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3 text-sm">
           <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">TX 1: Transferir ownership</p>
           <div className="space-y-1">
@@ -267,14 +365,10 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
             <button onClick={() => setStep('idle')} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 cursor-pointer">Cancelar</button>
           </div>
         </div>
-      </div>
-    );
-  }
+      )}
 
-  // Preview: Withdraw
-  if (step === 'preview-withdraw' && tokenAddress) {
-    return (
-      <div className="space-y-3">
+      {/* Preview: Withdraw */}
+      {step === 'preview-withdraw' && tokenAddress && (
         <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3 text-sm">
           <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">
             {withdrawal?.ownershipTransferredAt ? 'TX 2' : 'TX 1'}: Retirar liquidez
@@ -290,58 +384,54 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
             <button onClick={() => setStep('idle')} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 cursor-pointer">Cancelar</button>
           </div>
         </div>
-      </div>
-    );
-  }
+      )}
 
-  // Status display
-  const label = step === 'checking' ? 'Verificando...'
-    : step === 'transferring' ? 'Firmando...'
-    : step === 'confirming-transfer' ? 'Confirmando transferencia...'
-    : step === 'withdrawing' ? 'Firmando...'
-    : step === 'confirming-withdraw' ? 'Confirmando retiro...'
-    : step === 'refreshing' ? 'Actualizando...'
-    : step === 'done' ? 'Liquidez retirada'
-    : step === 'error' ? 'Reintentar'
-    : withdrawal?.withdrawnAt ? 'Liquidez retirada'
-    : withdrawal?.ownershipTransferredAt ? 'Continuar retiro'
-    : 'Retirar liquidez';
+      {/* Preview: Return ownership */}
+      {step === 'preview-return' && (
+        <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3 text-sm">
+          <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Devolver ownership al Master</p>
+          <div className="space-y-1">
+            <Param label="Contrato" value={addr(marketAddress)} />
+            <Param label="Funcion" value="transferOwnership" />
+            <Param label="Nuevo owner" value={addr(masterAddress)} />
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={handleReturnOwnership} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-orange-600 text-white hover:bg-orange-700 cursor-pointer">Confirmar y firmar</button>
+            <button onClick={() => setStep('idle')} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 cursor-pointer">Cancelar</button>
+          </div>
+        </div>
+      )}
 
-  const alreadyWithdrawn = withdrawal?.withdrawnAt || step === 'done';
-  const showReturnOwnership = withdrawal?.ownershipTransferredAt && !withdrawal?.ownershipReturnedAt && !alreadyWithdrawn;
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 flex-wrap">
-        <button
-          onClick={() => {
-            if (alreadyWithdrawn) return;
-            if (step === 'idle' || step === 'error') {
-              if (withdrawal?.ownershipTransferredAt && !withdrawal?.withdrawnAt) {
-                // Resume: skip to withdraw preview
-                handleCheck();
-              } else {
-                handleCheck();
-              }
-            }
-          }}
-          disabled={busy || !!alreadyWithdrawn}
-          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-purple-300 text-purple-700 bg-purple-50 hover:bg-purple-100 disabled:opacity-50 cursor-pointer"
-        >
-          {label}
-        </button>
-        {txHash && <TxLink hash={txHash} chainId={chainId} />}
-        {alreadyWithdrawn && <span className="text-xs text-green-600">OK</span>}
-        {error && <span className="text-xs text-red-500 max-w-xs truncate" title={error}>Error: {error.slice(0, 60)}</span>}
-      </div>
-      {showReturnOwnership && (
-        <button
-          onClick={handleReturnOwnership}
-          disabled={busy}
-          className="text-[10px] text-gray-400 hover:text-gray-600 underline cursor-pointer disabled:opacity-50"
-        >
-          Devolver ownership al Master
-        </button>
+      {/* Default state / busy state */}
+      {step !== 'preview-transfer' && step !== 'preview-return' && !(step === 'preview-withdraw' && tokenAddress) && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => {
+                if (alreadyWithdrawn) return;
+                if (step === 'idle' || step === 'error') {
+                  handleCheck();
+                }
+              }}
+              disabled={busy || !!alreadyWithdrawn}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-purple-300 text-purple-700 bg-purple-50 hover:bg-purple-100 disabled:opacity-50 cursor-pointer"
+            >
+              {label}
+            </button>
+            {txHash && <TxLink hash={txHash} chainId={chainId} />}
+            {alreadyWithdrawn && <span className="text-xs text-green-600">OK</span>}
+            {error && <span className="text-xs text-red-500 max-w-xs truncate" title={error}>Error: {error.slice(0, 60)}</span>}
+          </div>
+          {showReturnOwnership && (
+            <button
+              onClick={() => setStep('preview-return')}
+              disabled={busy}
+              className="text-[10px] text-gray-400 hover:text-gray-600 underline cursor-pointer disabled:opacity-50"
+            >
+              Devolver ownership al Master
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
