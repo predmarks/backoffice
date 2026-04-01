@@ -1,6 +1,6 @@
 import { inngest } from './client';
 import { db } from '@/db/client';
-import { sourcingRuns, topics as topicsTable, topicSignals, markets } from '@/db/schema';
+import { sourcingRuns, topics as topicsTable, topicSignals } from '@/db/schema';
 import { eq, sql, inArray } from 'drizzle-orm';
 import { ingestAllSources, markSignalsUsed } from '@/agents/sourcer/ingestion';
 import { updateTopics, markStaleTopics } from '@/agents/sourcer/topic-extractor';
@@ -350,32 +350,6 @@ export const ingestionJob = inngest.createFunction(
         },
         source: 'pipeline',
       });
-      // Check if any open markets are linked to fresh topics → trigger resolution checks
-      if (freshTopicIds.length > 0) {
-        await step.run('dispatch-resolution-checks', async () => {
-          const openMarkets = await db
-            .select({ id: markets.id, sourceContext: markets.sourceContext })
-            .from(markets)
-            .where(eq(markets.status, 'open'));
-
-          const topicSet = new Set(freshTopicIds);
-          const matched = openMarkets.filter((m) => {
-            const ctx = m.sourceContext as { topicIds?: string[] } | null;
-            return ctx?.topicIds?.some((tid) => topicSet.has(tid));
-          });
-
-          if (matched.length > 0) {
-            await inngest.send(
-              matched.map((m) => ({
-                name: 'markets/resolution.check' as const,
-                data: { id: m.id },
-              })),
-            );
-          }
-
-          return { dispatched: matched.length };
-        });
-      }
 
       return { status: 'complete', runId, topicIds: freshTopicIds };
     } catch (err) {

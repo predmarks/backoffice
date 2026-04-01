@@ -6,7 +6,7 @@ import { MAINNET_CHAIN_ID } from '@/lib/chains';
 
 export const cronResolution = inngest.createFunction(
   { id: 'cron-resolution-check' },
-  { cron: '0 8 * * *' },
+  { cron: '0 */6 * * *' },
   async ({ step }) => {
     const now = Math.floor(Date.now() / 1000);
     const in72h = now + 72 * 60 * 60;

@@ -3,7 +3,7 @@ import { ingestData } from './ingestion-data';
 import { ingestTwitter } from './ingestion-twitter';
 import { db } from '@/db/client';
 import { signals as signalsTable } from '@/db/schema';
-import { eq, inArray, isNotNull } from 'drizzle-orm';
+import { eq, and, gte, inArray, isNotNull } from 'drizzle-orm';
 import type { IngestionResult, DataPoint, SourceSignal } from './types';
 
 export async function ingestAllSources(): Promise<IngestionResult> {
@@ -47,20 +47,38 @@ export async function ingestAllSources(): Promise<IngestionResult> {
 
         persistedSignals.push({ ...signal, id: row.id });
       } else {
-        // No URL (e.g., data signals) — always insert
-        const [row] = await db
-          .insert(signalsTable)
-          .values({
-            type: signal.type,
-            text: signal.text,
-            summary: signal.summary ?? null,
-            source: signal.source,
-            category: signal.category ?? null,
-            publishedAt: new Date(signal.publishedAt),
-            dataPoints: signal.dataPoints ?? null,
-          })
-          .returning({ id: signalsTable.id });
-        persistedSignals.push({ ...signal, id: row.id });
+        // No URL (e.g., data signals) — insert only if value changed recently
+        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        const [existing] = await db
+          .select({ id: signalsTable.id })
+          .from(signalsTable)
+          .where(
+            and(
+              eq(signalsTable.source, signal.source),
+              eq(signalsTable.text, signal.text),
+              gte(signalsTable.createdAt, twoHoursAgo),
+            ),
+          )
+          .limit(1);
+
+        if (existing) {
+          // Same source + same text within 2h — skip duplicate
+          persistedSignals.push({ ...signal, id: existing.id });
+        } else {
+          const [row] = await db
+            .insert(signalsTable)
+            .values({
+              type: signal.type,
+              text: signal.text,
+              summary: signal.summary ?? null,
+              source: signal.source,
+              category: signal.category ?? null,
+              publishedAt: new Date(signal.publishedAt),
+              dataPoints: signal.dataPoints ?? null,
+            })
+            .returning({ id: signalsTable.id });
+          persistedSignals.push({ ...signal, id: row.id });
+        }
       }
     } catch (err) {
       console.warn('Signal persist failed:', err);
