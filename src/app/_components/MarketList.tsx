@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { MAINNET_CHAIN_ID } from '@/lib/chains';
 
 interface MarketEntry {
@@ -14,7 +13,9 @@ interface MarketEntry {
   onchainId: string | null;
   volume: string | null;
   participants: number | null;
-  resolution: { suggestedOutcome?: string; confidence?: string; flaggedAt?: string; evidenceUrls?: string[] } | null;
+  resolution: { suggestedOutcome?: string; confidence?: string; flaggedAt?: string; evidenceUrls?: string[]; checkingAt?: string } | null;
+  pendingBalance: string | null;
+  outcome: string | null;
 }
 
 const LIVE_STATUSES = ['open'];
@@ -103,6 +104,7 @@ export function MarketList({ markets, chainId }: { markets: MarketEntry[]; chain
 
   const live = filtered.filter((m) => LIVE_STATUSES.includes(m.status)).sort((a, b) => a.endTimestamp - b.endTimestamp);
   const inResolution = filtered.filter((m) => m.status === 'in_resolution');
+  const resolved = filtered.filter((m) => m.status === 'closed');
 
   return (
     <>
@@ -132,7 +134,7 @@ export function MarketList({ markets, chainId }: { markets: MarketEntry[]; chain
         />
       </div>
 
-      {live.length === 0 && inResolution.length === 0 ? (
+      {live.length === 0 && inResolution.length === 0 && resolved.length === 0 ? (
         <p className="text-gray-500">
           {query ? 'No hay mercados que coincidan.' : 'No hay mercados activos.'}
         </p>
@@ -175,6 +177,24 @@ export function MarketList({ markets, chainId }: { markets: MarketEntry[]; chain
               </div>
             </section>
           )}
+
+          {resolved.length > 0 && (
+            <section>
+              <div className="flex items-center gap-2 mb-5">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-purple-500" />
+                </span>
+                <h2 className="text-sm font-medium text-purple-600 uppercase tracking-wide">
+                  Resueltos ({resolved.length})
+                </h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                {resolved.map((m) => (
+                  <MarketCard key={m.id} market={m} />
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       )}
     </>
@@ -182,22 +202,25 @@ export function MarketList({ markets, chainId }: { markets: MarketEntry[]; chain
 }
 
 function MarketCard({ market: m, urgent = false, onCheck, verifying }: { market: MarketEntry; urgent?: boolean; onCheck?: (e: React.MouseEvent) => void; verifying?: boolean }) {
+  const router = useRouter();
   const dotColor = STATUS_DOT[m.status] ?? 'bg-gray-400';
+  const isChecking = verifying || (m.resolution?.checkingAt && Date.now() - new Date(m.resolution.checkingAt).getTime() < 10 * 60 * 1000);
 
   const verifyButton = urgent && onCheck ? (
     <button
       onClick={onCheck}
-      disabled={verifying}
+      disabled={!!isChecking}
       className="px-3 py-1 text-xs font-medium rounded-md bg-amber-300 hover:bg-amber-400 text-amber-900 disabled:opacity-50 transition-colors cursor-pointer shrink-0"
     >
-      {verifying ? 'Verificando...' : 'Verificar'}
+      {isChecking ? 'Verificando...' : 'Verificar'}
     </button>
   ) : null;
 
   return (
-    <Link
-      href={`/dashboard/markets/${m.id}`}
-      className={`rounded-xl border p-6 transition-all block ${
+    <div
+      onClick={() => router.push(`/dashboard/markets/${m.id}`)}
+      role="link"
+      className={`rounded-xl border p-6 transition-all block cursor-pointer ${
         urgent
           ? 'bg-amber-50 border-amber-300 hover:border-amber-400 hover:shadow-md'
           : 'bg-white border-gray-200 hover:border-blue-300 hover:shadow-md'
@@ -261,16 +284,22 @@ function MarketCard({ market: m, urgent = false, onCheck, verifying }: { market:
         </div>
       )}
       <div className="flex items-center justify-between text-sm text-gray-500 pt-3 border-t border-gray-100">
-        <span className="text-xs text-gray-400">Cierre: {formatEndDate(m.endTimestamp)}</span>
+        <span className="text-xs text-gray-400">
+          {m.status === 'closed' && m.outcome ? `Resultado: ${m.outcome}` : `Cierre: ${formatEndDate(m.endTimestamp)}`}
+        </span>
         <div className="flex items-center gap-4 ml-auto">
-          {m.volume && (
+          {m.pendingBalance && parseFloat(m.pendingBalance) > 0 ? (
+            <span className={`font-medium ${m.status === 'closed' ? 'text-amber-600' : ''}`} title={m.status === 'closed' ? 'Liquidez pendiente' : 'Liquidez'}>
+              {m.status === 'closed' ? 'Liquidez pendiente ' : ''}${formatVolume(m.pendingBalance)}
+            </span>
+          ) : m.volume ? (
             <span className="font-medium" title="Volumen">${formatVolume(m.volume)}</span>
-          )}
+          ) : null}
           {m.participants != null && m.participants > 0 && (
             <span title="Participantes">{m.participants} participante{m.participants !== 1 ? 's' : ''}</span>
           )}
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
