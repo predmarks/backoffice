@@ -31,6 +31,10 @@ export function EditableField({
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    if (!editing) setCurrent(value);
+  }, [value, editing]);
+
+  useEffect(() => {
     if (editing && inputRef.current) {
       inputRef.current.focus();
       if ('select' in inputRef.current) inputRef.current.select();
