@@ -96,6 +96,11 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
     }
   }, [withdrawal, step]);
 
+  // Reset done state when new liquidity is detected
+  useEffect(() => {
+    if (balanceLabel && step === 'done') setStep('idle');
+  }, [balanceLabel, step]);
+
   if (!isConnected || !address) return null;
 
   const logTx = (action: string, detail: Record<string, unknown>) =>
@@ -194,6 +199,7 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
         txHash: tx,
         newOwner: address,
         tokenAddress,
+        amount: balance,
       });
 
       setTxHash(null);
@@ -224,6 +230,7 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
       await logTx('market_liquidity_withdrawn', {
         txHash: tx,
         tokenAddress,
+        amount: balance,
       });
 
       setStep('refreshing');
@@ -255,6 +262,7 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
       await logTx('market_ownership_returned', {
         txHash: tx,
         masterAddress,
+        amount: balance,
       });
 
       setTxHash(null);
@@ -270,7 +278,7 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
   const busy = ['checking', 'transferring', 'confirming-transfer', 'withdrawing', 'confirming-withdraw', 'returning', 'confirming-return', 'refreshing'].includes(step);
   const { step1Done, step1Active, step1Busy, step2Done, step2Active, step2Busy } = getStepperState(step, withdrawal);
   const allDone = step1Done && step2Done;
-  const alreadyWithdrawn = withdrawal?.withdrawnAt || step === 'done';
+  const alreadyWithdrawn = (withdrawal?.withdrawnAt || step === 'done') && !balanceLabel;
   const showReturnOwnership = withdrawal?.ownershipTransferredAt && !withdrawal?.ownershipReturnedAt;
 
   // Determine which step's tx hash to show inline

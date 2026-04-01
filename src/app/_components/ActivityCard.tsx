@@ -58,6 +58,10 @@ const ACTION_BADGE: Record<string, { label: string; className: string }> = {
   resolution_confirmed: { label: 'Resolución confirmada', className: 'bg-green-100 text-green-700' },
   resolution_dismissed: { label: 'Resolución descartada', className: 'bg-gray-100 text-gray-600' },
   resolution_check_started: { label: 'Check resolución', className: 'bg-purple-100 text-purple-700' },
+  // Withdrawal
+  market_ownership_transferred: { label: 'Ownership transferido', className: 'bg-indigo-100 text-indigo-700' },
+  market_liquidity_withdrawn: { label: 'Liquidez retirada', className: 'bg-green-100 text-green-700' },
+  market_ownership_returned: { label: 'Ownership devuelto', className: 'bg-orange-100 text-orange-700' },
 };
 
 function formatTime(iso: string): string {
@@ -429,6 +433,14 @@ function getPreviewText(action: string, detail: Record<string, unknown>): string
   if (action === 'generation_started' && detail.instruction) {
     const instr = detail.instruction as string;
     return instr.length > 80 ? instr.slice(0, 80) + '…' : instr;
+  }
+  if (action === 'market_liquidity_withdrawn') {
+    const amount = detail.amount as string | undefined;
+    return amount ? `$${amount} retirados` : null;
+  }
+  if (action === 'market_ownership_transferred') {
+    const amount = detail.amount as string | undefined;
+    return amount ? `Balance: $${amount}` : null;
   }
   return null;
 }

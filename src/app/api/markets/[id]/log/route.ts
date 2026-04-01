@@ -66,16 +66,24 @@ export async function POST(
   // Withdrawal flow state persistence
   if (action === 'market_ownership_transferred') {
     const resolution = (market.resolution as Record<string, unknown> | null) ?? {};
-    const withdrawal = (resolution.withdrawal as Record<string, unknown> | null) ?? {};
-    await db.update(markets).set({
-      resolution: {
-        ...resolution,
-        withdrawal: {
-          ...withdrawal,
+    const prevWithdrawal = (resolution.withdrawal as Record<string, unknown> | null) ?? {};
+    // If re-withdrawing (previous withdrawal exists), start fresh
+    const withdrawal = prevWithdrawal.withdrawnAt
+      ? {
           ownershipTransferredAt: new Date().toISOString(),
           ownershipTransferTxHash: detail?.txHash,
           tokenAddress: detail?.tokenAddress,
-        },
+        }
+      : {
+          ...prevWithdrawal,
+          ownershipTransferredAt: new Date().toISOString(),
+          ownershipTransferTxHash: detail?.txHash,
+          tokenAddress: detail?.tokenAddress,
+        };
+    await db.update(markets).set({
+      resolution: {
+        ...resolution,
+        withdrawal,
       } as unknown as Resolution,
     }).where(eq(markets.id, id));
   }
