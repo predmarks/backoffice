@@ -3,7 +3,10 @@ export const dynamic = 'force-dynamic';
 import { getMarketAnalytics, formatVolume } from '@/lib/analytics';
 import { getUserTimezone } from '@/lib/timezone';
 import { validateChainId } from '@/lib/chains';
-import { VolumeOverTimeChart, ParticipantTrendChart } from './_components/Charts';
+import nextDynamic from 'next/dynamic';
+
+const VolumeOverTimeChart = nextDynamic(() => import('./_components/Charts').then(m => m.VolumeOverTimeChart));
+const ParticipantTrendChart = nextDynamic(() => import('./_components/Charts').then(m => m.ParticipantTrendChart));
 
 export default async function AnalyticsPage({ searchParams }: { searchParams: Promise<{ chain?: string }> }) {
   const params = await searchParams;

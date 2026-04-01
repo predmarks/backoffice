@@ -283,7 +283,7 @@ export default async function MarketDetailPage({ params }: Props) {
             </div>
 
             {/* Evidence */}
-            <p className="text-sm text-gray-700 mb-3"><CitedText>{resolution.evidence}</CitedText></p>
+            {typeof resolution.evidence === 'string' && <p className="text-sm text-gray-700 mb-3"><CitedText>{resolution.evidence}</CitedText></p>}
 
             {resolution.evidenceUrls && resolution.evidenceUrls.length > 0 && (
               <div className="mb-3">
@@ -351,41 +351,58 @@ export default async function MarketDetailPage({ params }: Props) {
         ];
 
         const allDone = steps.every((s) => s.done);
+        const currentStepIndex = steps.findIndex((s) => !s.done);
         const borderColor = allDone ? 'border-green-200' : 'border-purple-200';
         const bgColor = allDone ? 'bg-green-50' : 'bg-purple-50';
+        const balanceLabel = market.pendingBalance && parseFloat(market.pendingBalance) > 0
+          ? ` — $${formatVolume(market.pendingBalance)}`
+          : '';
 
         return (
           <div className={`mb-6 rounded-lg border p-6 ${bgColor} ${borderColor}`}>
             <div className="flex items-center gap-1 mb-4">
-              {steps.map((s, i) => (
-                <div key={s.label} className="flex items-center gap-1">
-                  {i > 0 && <div className={`w-4 h-px ${s.done ? 'bg-green-300' : 'bg-gray-300'}`} />}
-                  <div className="flex items-center gap-1.5">
-                    <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold ${
-                      s.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
-                    }`}>
-                      {s.done ? '\u2713' : i + 1}
-                    </span>
-                    {s.txHash ? (
-                      <a
-                        href={`${basescanBase}/tx/${s.txHash}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className={`text-[10px] font-medium hover:underline ${s.done ? 'text-green-700' : 'text-gray-500'}`}
-                      >
-                        {s.label}
-                      </a>
-                    ) : (
-                      <span className={`text-[10px] font-medium ${s.done ? 'text-green-700' : 'text-gray-500'}`}>
-                        {s.label}
+              {steps.map((s, i) => {
+                const isCurrent = i === currentStepIndex;
+                const circleClass = s.done
+                  ? 'bg-green-500 text-white'
+                  : isCurrent
+                    ? 'bg-purple-500 text-white'
+                    : 'bg-gray-200 text-gray-500';
+                const labelClass = s.done
+                  ? 'text-green-700'
+                  : isCurrent
+                    ? 'text-purple-700 font-semibold'
+                    : 'text-gray-500';
+                const lineClass = s.done ? 'bg-green-300' : 'bg-gray-300';
+
+                return (
+                  <div key={s.label} className="flex items-center gap-1">
+                    {i > 0 && <div className={`w-4 h-px ${lineClass}`} />}
+                    <div className="flex items-center gap-1.5">
+                      <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold ${circleClass}`}>
+                        {s.done ? '\u2713' : i + 1}
                       </span>
-                    )}
+                      {s.txHash ? (
+                        <a
+                          href={`${basescanBase}/tx/${s.txHash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`text-[10px] font-medium hover:underline ${labelClass}`}
+                        >
+                          {s.label}
+                        </a>
+                      ) : (
+                        <span className={`text-[10px] font-medium ${labelClass}`}>
+                          {s.label}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">Retiro de liquidez</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">Retiro de liquidez{balanceLabel}</h3>
 
             <WithdrawLiquidityButton
               marketId={market.id}

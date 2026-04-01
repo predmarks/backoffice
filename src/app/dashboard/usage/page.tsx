@@ -4,7 +4,9 @@ import { getUsageData, getDailyChartData, getUsageLog, formatTokens, type Operat
 import { TOKEN_BUDGETS } from '@/lib/llm';
 import { getUserTimezone } from '@/lib/timezone';
 import Link from 'next/link';
-import DailyChart from './_components/DailyChart';
+import nextDynamic from 'next/dynamic';
+
+const DailyChart = nextDynamic(() => import('./_components/DailyChart'));
 
 const OP_COLORS: Record<string, string> = {
   data_verify:          'bg-blue-500',

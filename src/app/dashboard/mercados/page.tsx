@@ -298,16 +298,27 @@ export default function MercadosPage() {
               </button>
             );
           })}
-          <button
-            onClick={() => setShowPendingOnly((v) => !v)}
-            className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
-              showPendingOnly
-                ? 'bg-amber-100 border-amber-300 text-amber-700'
-                : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-            }`}
-          >
-            Con liquidez pendiente
-          </button>
+          {(() => {
+            const totalPending = markets.reduce((sum, m) => {
+              if (m.pendingBalance && parseFloat(m.pendingBalance) > 0) {
+                return sum + parseFloat(m.pendingBalance);
+              }
+              return sum;
+            }, 0);
+            const totalLabel = totalPending > 0 ? ` ($${formatVolume(String(totalPending))})` : '';
+            return (
+              <button
+                onClick={() => setShowPendingOnly((v) => !v)}
+                className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
+                  showPendingOnly
+                    ? 'bg-amber-100 border-amber-300 text-amber-700'
+                    : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+                }`}
+              >
+                Con liquidez pendiente{totalLabel}
+              </button>
+            );
+          })()}
         </div>
       )}
 

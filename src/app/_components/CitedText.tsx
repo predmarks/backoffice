@@ -5,6 +5,8 @@ import React from 'react';
 const CITE_REGEX = /<cite\s+index="([^"]*)">([\s\S]*?)<\/cite>/g;
 
 export function CitedText({ children, className }: { children: string; className?: string }) {
+  if (!children) return null;
+
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
