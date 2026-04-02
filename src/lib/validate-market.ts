@@ -88,9 +88,3 @@ export function validateMarket(market: MarketLike, nowTs?: number): ValidationRe
 
   return { fixes, warnings };
 }
-
-export function applyFixes(market: Record<string, unknown>, result: ValidationResult): void {
-  for (const [field, fix] of Object.entries(result.fixes)) {
-    market[field] = fix.to;
-  }
-}

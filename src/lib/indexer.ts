@@ -134,25 +134,3 @@ export async function fetchOnchainMarkets(chainId: number, options?: FetchMarket
   return all;
 }
 
-export async function fetchOpenOnchainMarkets(chainId: number): Promise<OnchainMarket[]> {
-  const markets = await fetchOnchainMarkets(chainId, {
-    where: { resolvedTo: 0 },
-    orderBy: 'endTimestamp',
-    orderDirection: 'asc',
-  });
-
-  const now = Math.floor(Date.now() / 1000);
-  return markets.filter((m) => {
-    if (m.startTimestamp && now < m.startTimestamp) return false;
-    if (m.endTimestamp && now > m.endTimestamp) return false;
-    return true;
-  });
-}
-
-export async function fetchUnresolvedOnchainMarkets(chainId: number): Promise<OnchainMarket[]> {
-  return fetchOnchainMarkets(chainId, {
-    where: { resolvedTo: 0 },
-    orderBy: 'endTimestamp',
-    orderDirection: 'asc',
-  });
-}

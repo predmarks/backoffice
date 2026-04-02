@@ -22,7 +22,7 @@ This project is built with Next.js + TypeScript and uses:
   - optional embedding-based deduplication
   - auto-trigger review events
 - Dashboard views for proposals, market detail/actions, and resolution queue
-- API routes for market CRUD/actions, export payloads, sourcing trigger/status, and Inngest handler
+- API routes for market CRUD/actions, sourcing trigger/status, and Inngest handler
 
 See `ARCHITRECTURE.md` for the detailed system design and prompts.
 
@@ -85,19 +85,22 @@ npx tsx scripts/test-review.ts
 
 ## API overview
 
-- `GET /api/markets?status=...` - list markets (optional status filter)
-- `POST /api/markets` - create market
+See `ARCHITRECTURE.md` for the full 39-route API reference. Key endpoints:
+
+- `GET /api/markets?status=...` - list markets
 - `GET /api/markets/:id` - market detail
-- `PATCH /api/markets/:id` - update market
-- `POST /api/markets/:id/approve` - approve proposal
 - `POST /api/markets/:id/reject` - reject market
-- `POST /api/markets/:id/edit` - edit and approve
-- `POST /api/markets/:id/resolve` - resolve closed market
-- `GET /api/review/:id` - review payload/details
-- `GET /api/export/:id` - export deployable market JSON
+- `POST /api/markets/:id/edit` - edit market fields
+- `POST /api/markets/:id/resolve` - confirm resolution
+- `POST /api/markets/:id/check-resolution` - trigger resolution check
+- `POST /api/review/:id` - trigger review pipeline
+- `GET/POST /api/topics` - list/create topics
+- `GET /api/signals` - search signals
+- `POST /api/generate` - trigger market generation
 - `POST /api/sourcing` - trigger sourcing job
-- `GET /api/sourcing/status` - recent sourcing runs
-- `GET|POST|PUT /api/inngest` - Inngest endpoint
+- `GET/POST/DELETE /api/chat` - MiniChat (44 tools)
+- `POST /api/sync-deployed` - sync onchain markets
+- `GET|POST|PUT /api/inngest` - Inngest webhook
 
 ## Notes
 

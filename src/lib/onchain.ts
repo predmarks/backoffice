@@ -77,28 +77,6 @@ export async function fetchOnchainMarketData(onchainId: number, chainId: number 
   };
 }
 
-export async function fetchOnchainMarketDataBatch(onchainIds: number[], chainId: number = MAINNET_CHAIN_ID): Promise<Map<number, OnchainMarketData>> {
-  const results = new Map<number, OnchainMarketData>();
-
-  // Fetch in parallel, batches of 10
-  for (let i = 0; i < onchainIds.length; i += 10) {
-    const batch = onchainIds.slice(i, i + 10);
-    const fetched = await Promise.allSettled(
-      batch.map((id) => fetchOnchainMarketData(id, chainId)),
-    );
-    for (let j = 0; j < batch.length; j++) {
-      const result = fetched[j];
-      if (result.status === 'fulfilled') {
-        results.set(batch[j], result.value);
-      } else {
-        console.warn(`Failed to fetch onchain data for market ${batch[j]}:`, result.reason);
-      }
-    }
-  }
-
-  return results;
-}
-
 export async function fetchPendingBalances(
   marketAddresses: `0x${string}`[],
   chainId: number = MAINNET_CHAIN_ID,
