@@ -186,6 +186,13 @@ export default async function MarketDetailPage({ params }: Props) {
         />
       </div>
 
+      {/* Deploy button for candidates without onchainId */}
+      {market.status === 'candidate' && !market.onchainId && (
+        <div className="mb-4">
+          <DeployMarketButton marketId={market.id} />
+        </div>
+      )}
+
       <div className="max-w-3xl">
 
       {/* Auto-trigger resolution check when market is in_resolution but no suggestion yet */}
@@ -382,13 +389,6 @@ export default async function MarketDetailPage({ params }: Props) {
                 <Link href={`/dashboard/topics/${t.slug}`} className="text-blue-600 hover:underline">{t.name}</Link>
               </span>
             ))}
-          </div>
-        )}
-
-        {/* Deploy button for candidates without onchainId */}
-        {market.status === 'candidate' && !market.onchainId && (
-          <div className="mb-4">
-            <DeployMarketButton marketId={market.id} />
           </div>
         )}
 
