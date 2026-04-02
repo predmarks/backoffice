@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { usePageContext } from '@/app/_components/PageContext';
 import { SourcingTrigger, SourcingLog, useSourcingData } from '../monitoring/_components/SourcingPanel';
 import { SearchInput } from '@/app/dashboard/_components/SearchInput';
+import { FilterCombobox, type FilterGroup, type ActiveFilter } from '@/app/dashboard/_components/FilterCombobox';
 
 interface SignalData {
   id: string;
@@ -134,6 +135,51 @@ export default function SignalsPage() {
   const typeCounts = counts?.byType ?? {};
   const categoryCounts = counts?.byCategory ?? {};
 
+  // Build filter combobox data
+  const filterGroups: FilterGroup[] = useMemo(() => {
+    const groups: FilterGroup[] = [];
+    if (sources.length > 0) {
+      groups.push({
+        key: 'source',
+        label: 'Fuente',
+        options: sources.map(([source, count]) => ({ value: source, label: source, count })),
+      });
+    }
+    const typeEntries = Object.entries(TYPE_BADGE)
+      .map(([type, badge]) => ({ value: type, label: badge.label, count: typeCounts[type] ?? 0 }))
+      .filter(o => o.count > 0);
+    if (typeEntries.length > 0) {
+      groups.push({ key: 'type', label: 'Tipo', options: typeEntries });
+    }
+    const catEntries = CATEGORIES
+      .map(cat => ({ value: cat, label: cat, count: categoryCounts[cat] ?? 0 }))
+      .filter(o => o.count > 0);
+    if (catEntries.length > 0) {
+      groups.push({ key: 'category', label: 'Categoría', options: catEntries });
+    }
+    return groups;
+  }, [sources, typeCounts, categoryCounts]);
+
+  const activeFilters: ActiveFilter[] = useMemo(() => {
+    const filters: ActiveFilter[] = [];
+    if (sourceFilter) filters.push({ group: 'source', value: sourceFilter, label: sourceFilter });
+    if (typeFilter) filters.push({ group: 'type', value: typeFilter, label: TYPE_BADGE[typeFilter]?.label ?? typeFilter });
+    if (categoryFilter) filters.push({ group: 'category', value: categoryFilter, label: categoryFilter });
+    return filters;
+  }, [sourceFilter, typeFilter, categoryFilter]);
+
+  const handleFilterSelect = useCallback((group: string, value: string) => {
+    if (group === 'source') setSourceFilter(prev => prev === value ? null : value);
+    else if (group === 'type') setTypeFilter(prev => prev === value ? null : value);
+    else if (group === 'category') setCategoryFilter(prev => prev === value ? null : value);
+  }, []);
+
+  const handleFilterRemove = useCallback((group: string) => {
+    if (group === 'source') setSourceFilter(null);
+    else if (group === 'type') setTypeFilter(null);
+    else if (group === 'category') setCategoryFilter(null);
+  }, []);
+
   // Push visible data to MiniChat context
   const { setPageData } = usePageContext();
   const pageContent = useMemo(
@@ -157,102 +203,20 @@ export default function SignalsPage() {
         />
       </div>
 
-      {/* Source filters */}
-      {sources.length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => setSourceFilter(null)}
-            className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
-              sourceFilter === null
-                ? 'bg-gray-800 text-white border-gray-800'
-                : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-            }`}
-          >
-            Todos ({counts?.total ?? 0})
-          </button>
-          {sources.map(([source, count]) => (
-            <button
-              key={source}
-              onClick={() => setSourceFilter(sourceFilter === source ? null : source)}
-              className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
-                sourceFilter === source
-                  ? 'bg-gray-800 text-white border-gray-800'
-                  : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-              }`}
-            >
-              {source} ({count})
-            </button>
-          ))}
+      <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Buscar por texto, resumen o fuente..." />
         </div>
-      )}
-
-      <SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Buscar por texto, resumen o fuente..." />
-
-      {/* Type filters */}
-      {Object.keys(typeCounts).length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => setTypeFilter(null)}
-            className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
-              typeFilter === null
-                ? 'bg-gray-800 text-white border-gray-800'
-                : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-            }`}
-          >
-            Todos tipos ({counts?.total ?? 0})
-          </button>
-          {Object.entries(TYPE_BADGE).map(([type, badge]) => {
-            const count = typeCounts[type] ?? 0;
-            if (count === 0) return null;
-            return (
-              <button
-                key={type}
-                onClick={() => setTypeFilter(typeFilter === type ? null : type)}
-                className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
-                  typeFilter === type
-                    ? 'bg-gray-800 text-white border-gray-800'
-                    : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-                }`}
-              >
-                {badge.label} ({count})
-              </button>
-            );
-          })}
+        <div className="flex-1">
+          <FilterCombobox
+            groups={filterGroups}
+            active={activeFilters}
+            onSelect={handleFilterSelect}
+            onRemove={handleFilterRemove}
+            placeholder="Filtrar por fuente, tipo o categoría..."
+          />
         </div>
-      )}
-
-      {/* Category filters */}
-      {Object.keys(categoryCounts).length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => setCategoryFilter(null)}
-            className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
-              categoryFilter === null
-                ? 'bg-gray-800 text-white border-gray-800'
-                : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-            }`}
-          >
-            Todas ({counts?.total ?? 0})
-          </button>
-          {CATEGORIES.map((cat) => {
-            const catCount = categoryCounts[cat] ?? 0;
-            if (catCount === 0) return null;
-            return (
-              <button
-                key={cat}
-                onClick={() => setCategoryFilter(categoryFilter === cat ? null : cat)}
-                className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
-                  categoryFilter === cat
-                    ? 'bg-gray-800 text-white border-gray-800'
-                    : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-                }`}
-              >
-                {cat} ({catCount})
-              </button>
-            );
-          })}
-        </div>
-      )}
+      </div>
 
       {/* Signal list */}
       {loading && <div className="text-sm text-gray-500">Cargando señales...</div>}

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { signals } from '@/db/schema';
-import { desc, and, or, eq, ilike, sql } from 'drizzle-orm';
+import { desc, and, or, eq, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 
 export async function GET(request: NextRequest) {
@@ -19,9 +19,9 @@ export async function GET(request: NextRequest) {
     const pattern = `%${q}%`;
     conditions.push(
       or(
-        ilike(signals.text, pattern),
-        ilike(signals.summary, pattern),
-        ilike(signals.source, pattern),
+        sql`unaccent(${signals.text}) ilike unaccent(${pattern})`,
+        sql`unaccent(${signals.summary}) ilike unaccent(${pattern})`,
+        sql`unaccent(${signals.source}) ilike unaccent(${pattern})`,
       )!,
     );
   }
