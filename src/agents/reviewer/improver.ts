@@ -11,7 +11,8 @@ REGLAS:
 - Corregí SOLAMENTE los problemas señalados en el feedback. No cambies lo que estaba bien.
 - NUNCA cambies el tipo de mercado: si el mercado es multi-opción, mantenelo multi-opción. Si es binario, mantenelo binario. Convertir un multi-opción a binario destruye el sentido del mercado.
 - Items marcados [NO CORREGIDO] son problemas que NO se resolvieron en la iteración anterior.
-  Intentá una solución DIFERENTE — el enfoque previo no funcionó. Reestructurá, reenmarcá o cambiá la estrategia.
+  Intentá una solución DIFERENTE — el enfoque previo no funcionó. Reenmarcá la pregunta, ajustá criterios o cambiá el ángulo, pero NUNCA cambies el tema central del mercado.
+- NUNCA cambies el tema del mercado. Podés ajustar el ángulo, la pregunta o el encuadre, pero el sujeto central (qué se está prediciendo) debe ser el mismo. Si el mercado es sobre pobreza, no lo conviertas en uno sobre déficit fiscal.
 - Devolvé el mercado completo con todas las mejoras aplicadas.
 - Todo el contenido en español argentino.`;
 
@@ -59,7 +60,7 @@ function formatHistory(history: Iteration[]): string {
   return history
     .map((iter) => {
       const score = iter.review.scores.overallScore.toFixed(1);
-      return `Versión ${iter.version} (score: ${score}/10):\n  Feedback: ${iter.feedback || 'N/A'}`;
+      return `Versión ${iter.version} (score: ${score}/10):\n  Título: ${iter.market.title}\n  Feedback: ${iter.feedback || 'N/A'}`;
     })
     .join('\n');
 }
@@ -97,9 +98,14 @@ export async function improveMarket(
     ? 'Binario (Si/No)'
     : `Multi-opción (${market.outcomes.length} opciones: ${market.outcomes.join(', ')})`;
 
+  const originalTitle = iterationHistory.length > 0
+    ? iterationHistory[0].market.title
+    : null;
+
   const userMessage = `Mejorá este mercado corrigiendo los problemas detectados.
 
 TIPO DE MERCADO: ${marketTypeLabel} — NO cambiar el tipo.
+${originalTitle ? `TEMA ORIGINAL DEL MERCADO: "${originalTitle}" — el tema central NO debe cambiar.\n` : ''}
 
 FEEDBACK DE LA REVISIÓN:
 ${feedback}
