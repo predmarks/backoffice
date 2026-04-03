@@ -5,7 +5,7 @@ export function toDeployableMarket(market: Market): DeployableMarket {
     name: market.title,
     description: market.description,
     category: market.category,
-    outcomes: market.outcomes,
+    outcomes: market.outcomes.map((o) => o.replace(/,/g, '.')),
     endTimestamp: market.endTimestamp,
   };
 }

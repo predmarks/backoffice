@@ -67,6 +67,7 @@ Reglas para los campos que generes:
 - Para mercados binarios: pregunta sí/no con outcomes ["Si", "No"]
 - Para mercados multi-opción: pregunta clara con outcomes listando todas las opciones
 - Si el mercado tiene más de 2 respuestas naturales, usar multi-opción. Incluir "Otro" si las opciones no son exhaustivas
+- Números decimales con PUNTO (.) no coma en outcomes: "34.5%" no "34,5%"
 - La descripción da contexto sobre el evento
 - Los criterios de resolución deben ser inequívocos y verificables
 - La fuente de resolución debe ser una autoridad o URL verificable

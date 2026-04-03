@@ -29,6 +29,9 @@ TIPO DE MERCADO:
 - Multi-opción: incluir "Otro" salvo outcomes matemáticamente exhaustivos.
 - Al menos 2 outcomes >10% probabilidad. Si uno domina >85%, reformular.
 
+FORMATO NUMÉRICO EN OUTCOMES:
+- SIEMPRE usar punto (.) como separador decimal: "34.5%" no "34,5%". Crítico para evitar errores de parseo onchain.
+
 CONTINGENCIAS (incluir las que apliquen):
 - Fuente no publica → alternativa o última disponible.
 - Evento cancelado → "No" (binarios) o según opciones.
@@ -74,7 +77,7 @@ const OUTPUT_SCHEMA = {
         properties: {
           title: { type: 'string' as const, description: 'Pregunta clara en español argentino, con signos de interrogación' },
           description: { type: 'string' as const, description: 'Especificación completa del mercado en Markdown con secciones ## Criterio de resolución, ## Contingencias, ## Fuente de resolución. Ver ejemplos en el prompt.' },
-          outcomes: { type: 'array' as const, items: { type: 'string' as const }, description: 'Opciones del mercado. Binarios: ["Si", "No"]. Multi-opción: listar todas las opciones.' },
+          outcomes: { type: 'array' as const, items: { type: 'string' as const }, description: 'Opciones del mercado. Binarios: ["Si", "No"]. Multi-opción: listar todas las opciones. IMPORTANTE: usar punto (.) como separador decimal, nunca coma.' },
           resolutionCriteria: { type: 'string' as const, description: 'Resumen de una línea del criterio de resolución (extraído de la descripción)' },
           resolutionSource: { type: 'string' as const, description: 'Nombre y URL de la fuente de resolución (extraído de la descripción)' },
           contingencies: { type: 'string' as const, description: 'Resumen de una línea de las contingencias (extraído de la descripción)' },

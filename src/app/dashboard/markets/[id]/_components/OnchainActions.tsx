@@ -45,7 +45,7 @@ export function OnchainActions({ marketId, onchainId, title, description, catego
         title,
         description,
         category,
-        outcomes,
+        outcomes.map((o) => o.replace(/,/g, '.')),
         BigInt(0), // startTimestamp: 0 = don't change
         BigInt(endTimestamp),
         zeroAddress, // creator: zero = don't change

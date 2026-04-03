@@ -14,6 +14,7 @@ REGLAS:
   Intentá una solución DIFERENTE — el enfoque previo no funcionó. Reenmarcá la pregunta, ajustá criterios o cambiá el ángulo, pero NUNCA cambies el tema central del mercado.
 - NUNCA cambies el tema del mercado. Podés ajustar el ángulo, la pregunta o el encuadre, pero el sujeto central (qué se está prediciendo) debe ser el mismo. Si el mercado es sobre pobreza, no lo conviertas en uno sobre déficit fiscal.
 - Los mercados NUNCA se anulan. Toda contingencia debe resolverse a uno de los outcomes definidos, nunca a "anulado" o "void".
+- Números decimales en outcomes con PUNTO (.) no coma: "34.5%" no "34,5%". Crítico para parseo onchain.
 - Devolvé el mercado completo con todas las mejoras aplicadas.
 - Todo el contenido en español argentino.`;
 
@@ -27,7 +28,7 @@ const OUTPUT_SCHEMA = {
     contingencies: { type: 'string' as const, description: 'Contingencias mejoradas' },
     category: { type: 'string' as const, enum: ['Política', 'Economía', 'Deportes', 'Entretenimiento', 'Clima', 'Otros'] },
     tags: { type: 'array' as const, items: { type: 'string' as const } },
-    outcomes: { type: 'array' as const, items: { type: 'string' as const }, description: 'Opciones del mercado. Binarios: ["Si", "No"]. Multi-opción: listar todas las opciones (3-8). Incluir "Otro" salvo que sean matemáticamente exhaustivas.' },
+    outcomes: { type: 'array' as const, items: { type: 'string' as const }, description: 'Opciones del mercado. Binarios: ["Si", "No"]. Multi-opción: listar todas las opciones (3-8). Incluir "Otro" salvo que sean matemáticamente exhaustivas. IMPORTANTE: usar punto (.) como separador decimal, nunca coma.' },
     endTimestamp: { type: 'number' as const, description: 'Unix timestamp del cierre (ajustar si timing es inseguro)' },
     expectedResolutionDate: { type: 'string' as const, description: 'Fecha esperada YYYY-MM-DD' },
     timingSafety: { type: 'string' as const, enum: ['safe', 'caution', 'dangerous'] },
