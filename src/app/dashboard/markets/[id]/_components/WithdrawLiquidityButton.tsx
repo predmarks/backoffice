@@ -15,6 +15,7 @@ interface Props {
   chainId: number;
   withdrawal?: WithdrawalProgress | null;
   balanceLabel?: string;
+  hasUnredeemedWinners?: boolean;
 }
 
 type Step =
@@ -74,7 +75,7 @@ function getStepperState(step: Step, withdrawal?: WithdrawalProgress | null) {
   return { step1Done, step1Active, step1Busy, step2Done, step2Active, step2Busy };
 }
 
-export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, chainId, withdrawal, balanceLabel }: Props) {
+export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, chainId, withdrawal, balanceLabel, hasUnredeemedWinners }: Props) {
   const router = useRouter();
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
@@ -354,6 +355,12 @@ export function WithdrawLiquidityButton({ marketId, onchainId, marketAddress, ch
           );
         })}
       </div>
+
+      {hasUnredeemedWinners && (
+        <p className="text-[10px] text-amber-700 bg-amber-100 border border-amber-200 rounded px-2 py-1 mb-3">
+          Hay usuarios con posiciones ganadoras sin redimir. Retirar liquidez puede impedir que cobren.
+        </p>
+      )}
 
       <h3 className="text-sm font-semibold text-gray-700 mb-3">Retiro de liquidez{balanceLabel ? ` — ${balanceLabel}` : ''}</h3>
 

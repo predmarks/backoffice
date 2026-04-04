@@ -10,7 +10,8 @@ import { toDeployableMarket } from '@/lib/export';
 import { getBasescanUrl, getPredmarksUrl } from '@/lib/chains';
 import { REPORTER_ADDRESSES as REPORTER_ADDRESSES_PUBLIC } from '@/lib/contracts';
 import { fetchOnchainMarketData, fetchMarketResult } from '@/lib/onchain';
-import { fetchOnchainMarkets } from '@/lib/indexer';
+import { fetchOnchainMarkets, fetchUnredeemedPositions } from '@/lib/indexer';
+import type { UnredeemedPosition } from '@/lib/indexer';
 import { StatusBadge } from '../../_components/StatusBadge';
 import { TimingSafetyIndicator } from '../../_components/TimingSafetyIndicator';
 import { MarketActions } from './_components/MarketActions';
@@ -22,6 +23,7 @@ import { DeployMarketButton } from './_components/DeployMarketButton';
 import { OnchainActionsWrapper as OnchainActions } from './_components/OnchainActionsWrapper';
 import { ResolveOnchainButton } from './_components/ResolveOnchainButton';
 import { WithdrawLiquidityButton } from './_components/WithdrawLiquidityButton';
+import { UnredeemedWinners } from './_components/UnredeemedWinners';
 import { Markdown } from '../../../_components/Markdown';
 
 import { ActivityCard } from '@/app/_components/ActivityCard';
@@ -70,6 +72,7 @@ export default async function MarketDetailPage({ params }: Props) {
 
   // Fetch onchain data and sync market status/fields on every page load
   let onchainData: { name: string; description: string; category: string; outcomes: string[]; endTimestamp: number; marketAddress: string } | null = null;
+  let resolvedTo = 0;
   if (market.onchainId) {
     try {
       const [data, indexerMarkets] = await Promise.all([
@@ -88,7 +91,7 @@ export default async function MarketDetailPage({ params }: Props) {
 
       // Compute correct status from onchain state
       const now = Math.floor(Date.now() / 1000);
-      let resolvedTo = indexerMarkets.find((m) => m.onchainId === market.onchainId)?.resolvedTo ?? 0;
+      resolvedTo = indexerMarkets.find((m) => m.onchainId === market.onchainId)?.resolvedTo ?? 0;
       // Fallback: check contract directly if indexer is behind
       if (resolvedTo === 0 && data.marketAddress && data.marketAddress !== '0x0000000000000000000000000000000000000000') {
         try {
@@ -125,6 +128,18 @@ export default async function MarketDetailPage({ params }: Props) {
       market.status = 'in_resolution';
       await db.update(markets).set({ status: 'in_resolution' }).where(eq(markets.id, id));
     }
+  }
+
+  // Fetch unredeemed winning positions for resolved markets
+  let unredeemedPositions: UnredeemedPosition[] = [];
+  if (resolvedTo > 0 && market.onchainAddress) {
+    try {
+      unredeemedPositions = await fetchUnredeemedPositions(
+        market.chainId,
+        market.onchainAddress,
+        resolvedTo,
+      );
+    } catch { /* indexer failure — skip */ }
   }
 
   const deployable = toDeployableMarket(market as unknown as Market);
@@ -344,6 +359,7 @@ export default async function MarketDetailPage({ params }: Props) {
 
         return (
           <div className="mb-6">
+            <UnredeemedWinners positions={unredeemedPositions} chainId={market.chainId} />
             <WithdrawLiquidityButton
               marketId={market.id}
               onchainId={Number(market.onchainId)}
@@ -351,6 +367,7 @@ export default async function MarketDetailPage({ params }: Props) {
               chainId={market.chainId}
               withdrawal={withdrawal ?? null}
               balanceLabel={pendingLabel}
+              hasUnredeemedWinners={unredeemedPositions.length > 0}
             />
           </div>
         );

@@ -111,6 +111,175 @@ interface FetchMarketsOptions {
   orderDirection?: 'asc' | 'desc';
 }
 
+// --- Unredeemed positions ---
+
+export interface UnredeemedPosition {
+  id: string;
+  account: string;
+  shares: string;
+  invested: string;
+  lastEventTimestamp: number;
+}
+
+const UNREDEEMED_POSITIONS_QUERY = `
+  query UnredeemedPositions(
+    $limit: Int!
+    $skip: Int!
+    $market: String!
+    $outcome: Int!
+  ) {
+    accountPositions(
+      first: $limit
+      skip: $skip
+      where: {
+        market: $market
+        outcome: $outcome
+        isRedeemed: false
+        shares_gt: "10000"
+      }
+      orderBy: shares
+      orderDirection: desc
+    ) {
+      id
+      account
+      shares
+      invested
+      lastEventTimestamp
+    }
+  }
+`;
+
+type RawUnredeemedPosition = {
+  id: string;
+  account: string;
+  shares: string;
+  invested: string;
+  lastEventTimestamp: string | number;
+};
+
+export async function fetchUnredeemedPositions(
+  chainId: number,
+  marketAddress: string,
+  winningOutcome: number,
+): Promise<UnredeemedPosition[]> {
+  const all: UnredeemedPosition[] = [];
+  let skip = 0;
+  const market = marketAddress.toLowerCase();
+
+  while (true) {
+    const { accountPositions } = await queryIndexer<{ accountPositions: RawUnredeemedPosition[] }>(
+      chainId,
+      UNREDEEMED_POSITIONS_QUERY,
+      { limit: PAGE_SIZE, skip, market, outcome: winningOutcome },
+    );
+    all.push(
+      ...accountPositions.map((p) => ({
+        ...p,
+        lastEventTimestamp: Number(p.lastEventTimestamp),
+      })),
+    );
+    if (accountPositions.length < PAGE_SIZE) break;
+    skip += PAGE_SIZE;
+  }
+
+  return all;
+}
+
+const ALL_UNREDEEMED_QUERY = `
+  query AllUnredeemedPositions($limit: Int!, $skip: Int!) {
+    accountPositions(
+      first: $limit
+      skip: $skip
+      where: {
+        isRedeemed: false
+        shares_gt: "10000"
+      }
+      orderBy: shares
+      orderDirection: desc
+    ) {
+      id
+      account
+      shares
+      invested
+      outcome
+      market {
+        id
+        onchainId
+        name
+        resolvedTo
+      }
+    }
+  }
+`;
+
+type RawUnredeemedWithMarket = RawUnredeemedPosition & {
+  outcome: number;
+  market: { id: string; onchainId: string; name: string; resolvedTo: number };
+};
+
+export interface MarketRedemptionSummary {
+  marketAddress: string;
+  onchainId: string;
+  marketName: string;
+  resolvedTo: number;
+  unredeemedCount: number;
+  totalUnredeemedShares: bigint;
+  totalUnredeemedInvested: bigint;
+  positions: UnredeemedPosition[];
+}
+
+export async function fetchMarketsWithUnredeemedWinners(
+  chainId: number,
+): Promise<MarketRedemptionSummary[]> {
+  // Fetch all unredeemed positions
+  const all: RawUnredeemedWithMarket[] = [];
+  let skip = 0;
+
+  while (true) {
+    const { accountPositions } = await queryIndexer<{ accountPositions: RawUnredeemedWithMarket[] }>(
+      chainId,
+      ALL_UNREDEEMED_QUERY,
+      { limit: PAGE_SIZE, skip },
+    );
+    all.push(...accountPositions);
+    if (accountPositions.length < PAGE_SIZE) break;
+    skip += PAGE_SIZE;
+  }
+
+  // Keep only winning positions on resolved markets
+  // Both outcome and resolvedTo use the same 1-indexed scheme from the contract
+  const winning = all.filter(
+    (p) => Number(p.market.resolvedTo) > 0 && Number(p.outcome) === Number(p.market.resolvedTo),
+  );
+
+  // Group by market
+  const byMarket = new Map<string, { market: RawUnredeemedWithMarket['market']; positions: RawUnredeemedWithMarket[] }>();
+  for (const p of winning) {
+    const key = p.market.id;
+    if (!byMarket.has(key)) {
+      byMarket.set(key, { market: p.market, positions: [] });
+    }
+    byMarket.get(key)!.positions.push(p);
+  }
+
+  return Array.from(byMarket.values()).map(({ market, positions }) => ({
+    marketAddress: market.id,
+    onchainId: market.onchainId,
+    marketName: market.name,
+    resolvedTo: market.resolvedTo,
+    unredeemedCount: positions.length,
+    totalUnredeemedShares: positions.reduce((sum, p) => sum + BigInt(p.shares), BigInt(0)),
+    totalUnredeemedInvested: positions.reduce((sum, p) => sum + BigInt(p.invested), BigInt(0)),
+    positions: positions.map((p) => ({
+      id: p.id,
+      account: p.account,
+      shares: p.shares,
+      invested: p.invested,
+      lastEventTimestamp: Number(p.lastEventTimestamp),
+    })),
+  }));
+}
+
 export async function fetchOnchainMarkets(chainId: number, options?: FetchMarketsOptions): Promise<OnchainMarket[]> {
   const all: OnchainMarket[] = [];
   let skip = 0;
