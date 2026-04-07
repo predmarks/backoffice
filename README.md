@@ -1,4 +1,4 @@
-# Predmarks Market Agents
+# Predmarks Backoffice
 
 Agentic pipeline for sourcing, reviewing, and resolving prediction markets for Predmarks.
 

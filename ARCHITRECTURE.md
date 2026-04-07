@@ -1148,7 +1148,7 @@ Two core functions power all agent LLM calls:
 ### Project structure
 
 ```
-predmarks-market-agents/
+predmarks-backoffice/
 ├── src/
 │   ├── middleware.ts                          # Auth middleware (session cookie check)
 │   ├── app/

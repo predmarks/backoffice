@@ -1,4 +1,4 @@
-# Predmarks Agents
+# Predmarks Backoffice
 
 ## What this is
 Agentic system for sourcing, reviewing, and resolving prediction markets

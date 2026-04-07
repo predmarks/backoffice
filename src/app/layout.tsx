@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Predmarks Agents",
+  title: "Predmarks Backoffice",
   description: "Agentic pipeline for prediction market management",
 };
 
