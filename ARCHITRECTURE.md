@@ -1698,14 +1698,14 @@ rather than running on a fixed schedule.
 - Topic management: feedback, rescoring, stale detection, dismissal
 - LLM market generation with deduplication (OpenAI embeddings)
 - Feedback learning loop: global instructions + rejection history + conversational feedback loaded into generation prompts
-- Cron-based ingestion (Mon/Wed/Fri 9am) + manual trigger
+- Cron-based ingestion: daily midnight (full) + hourly (light) + manual trigger
 - Separate ingestion and generation jobs for flexibility
 - Topic suggestion via Claude web search
 - Configurable CANDIDATE_CAP
 - Wire to Reviewer via Inngest events (`market/candidate.created`)
 
 ### Phase 3.5: Dashboard & UX — DONE
-- Kanban pipeline board (Topics → Candidates → Proposals → Open)
+- Dashboard pages: signals, topics, mercados/markets, resolution, monitoring, usage, redemptions, archive
 - Signals page with ingestion trigger + run log
 - Topics page with management, generation trigger, suggestion
 - Conversational market feedback (Claude agent with tool-use)
@@ -1721,7 +1721,7 @@ rather than running on a fixed schedule.
 - Resolution feedback system (per-market feedback for evaluator)
 - Dashboard: resolution confirmation, dismiss, suggest flows
 - Testnet: random resolution for testing
-- **Still TODO:** Slack/webhook alerts for emergencies
+- **Still TODO:** Discord alerts for emergencies
 
 ### Phase 5: Polish — PARTIAL
 - ✅ Cost tracking and usage dashboard (`/dashboard/usage`)
@@ -1730,6 +1730,6 @@ rather than running on a fixed schedule.
 - ✅ Onchain integration (deploy, resolve, withdraw, sync)
 - ✅ DB-backed rules and signal sources (editable from dashboard and chat)
 - ✅ Analytics dashboard (`/dashboard/analytics`)
-- TODO: Prompt tuning from real results (ongoing)
-- TODO: Weather market pipeline optimization
-- TODO: Slack/webhook notifications
+- ✅ Prompt tuning from real results (resolution feedback + sourcer rejection history + conversational feedback)
+- TODO: Discord notifications (emergencies, resolution events)
+- TODO: Newsletter system for market updates to users

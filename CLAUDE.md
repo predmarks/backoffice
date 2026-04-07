@@ -9,18 +9,19 @@ Read ARCHITECTURE.md for the full system design, data models, prompts,
 rules, and implementation roadmap.
 
 ## Tech stack
-- Next.js 14+ (App Router)
+- Next.js 16 (App Router)
 - TypeScript (strict mode)
 - Vercel Postgres + Drizzle ORM
 - Inngest for job orchestration
 - Claude API (Sonnet) for all LLM agents
+- OpenAI SDK (embeddings for deduplication)
 - Deployed on Vercel
 
 ## Conventions
 - All market content in Spanish (Argentine)
 - All code in English
 - Use Drizzle for all database access
-- Never hardcode rules into prompts — load from config/rules.ts
+- Never hardcode rules into prompts — rules are DB-backed and editable from dashboard/chat
 
 ## Commands
 - `npm run dev` — Start dev server

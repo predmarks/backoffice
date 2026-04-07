@@ -21,8 +21,13 @@ This project is built with Next.js + TypeScript and uses:
   - market generation
   - optional embedding-based deduplication
   - auto-trigger review events
-- Dashboard views for proposals, market detail/actions, and resolution queue
-- API routes for market CRUD/actions, sourcing trigger/status, and Inngest handler
+- Resolution checker with web search, emergency detection, and feedback loop
+- MiniChat copilot with 44 tools (global, topic, market, signal contexts)
+- Onchain integration (deploy, resolve, withdraw, sync)
+- Authentication (users, sessions, cookie-based)
+- DB-backed rules and signal sources (editable from dashboard and chat)
+- Dashboard views for signals, topics, markets, resolution, monitoring, usage, and more
+- API routes for market CRUD/actions, sourcing trigger/status, chat, and Inngest handler
 
 See `ARCHITRECTURE.md` for the detailed system design and prompts.
 
@@ -45,7 +50,7 @@ See `ARCHITRECTURE.md` for the detailed system design and prompts.
 
 ## Environment variables
 
-Create `.env.local` with:
+Create `.env` with:
 
 ```bash
 POSTGRES_URL=postgres://...
