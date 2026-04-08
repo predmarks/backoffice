@@ -8,7 +8,7 @@ import dynamic from 'next/dynamic';
 import { logout } from '../login/actions';
 import { MAINNET_CHAIN_ID, TESTNET_CHAIN_ID } from '@/lib/chains';
 import {
-  BookOpen, TrendingUp, Wallet, Mail,
+  Zap, BookOpen, TrendingUp, Wallet, Mail,
   Radio, Scale, Activity, BarChart3,
   Settings, ChevronDown,
   type LucideProps,
@@ -99,6 +99,7 @@ export function Nav() {
             <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700 shrink-0">Testnet</span>
           )}
 
+          {navLink('/', 'Live', Zap)}
           {navLink('/dashboard/topics', 'Temas', BookOpen)}
           {navLink('/dashboard/mercados', 'Mercados', TrendingUp)}
           {navLink('/dashboard/redemptions', 'Retiros', Wallet)}
