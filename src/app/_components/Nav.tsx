@@ -100,9 +100,9 @@ export function Nav() {
           )}
 
           {navLink('/', 'Live', Zap)}
-          {navLink('/dashboard/topics', 'Temas', BookOpen)}
           {navLink('/dashboard/mercados', 'Mercados', TrendingUp)}
-          {navLink('/dashboard/redemptions', 'Retiros', Wallet)}
+          {navLink('/dashboard/redemptions', 'Liquidity', Wallet)}
+          {navLink('/dashboard/topics', 'Temas', BookOpen)}
           {navLink('/dashboard/newsletter', 'Newsletter', Mail)}
         </div>
 

@@ -4,8 +4,7 @@ import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
-// Serializable version of MarketRedemptionSummary (bigints as strings)
-export interface MarketSummary {
+export interface LiquidityMarket {
   marketAddress: string;
   onchainId: string;
   marketName: string;
@@ -18,10 +17,11 @@ export interface MarketSummary {
   dbTitle?: string;
   outcomes: string[];
   pendingBalance?: string | null;
+  withdrawal: { ownershipTransferredAt?: string; withdrawnAt?: string } | null;
 }
 
 interface Props {
-  markets: MarketSummary[];
+  markets: LiquidityMarket[];
   ownedAddresses: string[];
   basescanUrl: string;
 }
@@ -172,7 +172,7 @@ function PositionsTable({
   basescanUrl,
   muted,
 }: {
-  positions: MarketSummary['positions'];
+  positions: LiquidityMarket['positions'];
   basescanUrl: string;
   muted?: boolean;
 }) {
@@ -230,19 +230,14 @@ export function RedemptionsView({ markets, ownedAddresses, basescanUrl }: Props)
     });
   }, [markets, ownedSet]);
 
-  const externalMarkets = filtered.filter((m) => m.external.length > 0);
-  const ownedOnly = filtered.filter((m) => m.external.length === 0 && m.owned.length > 0);
   const hasAnyOwned = filtered.some((m) => m.owned.length > 0);
-
-  const totalExternal = filtered.reduce((sum, m) => sum + m.external.length, 0);
-
   const [showOwned, setShowOwned] = useState(false);
 
   return (
     <div>
-      {/* Header */}
+      {/* Page header */}
       <div className="flex items-center justify-between mb-2">
-        <h1 className="text-2xl font-bold">Retiros pendientes</h1>
+        <h1 className="text-2xl font-bold">Liquidity</h1>
         <button
           onClick={() => setShowModal(true)}
           className="px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-600 hover:bg-gray-50 cursor-pointer"
@@ -252,24 +247,30 @@ export function RedemptionsView({ markets, ownedAddresses, basescanUrl }: Props)
       </div>
 
       <p className="text-sm text-gray-500 mb-6">
-        {totalExternal === 0
-          ? 'Todos los mercados resueltos tienen sus posiciones ganadoras redimidas.'
-          : `${totalExternal} usuario${totalExternal !== 1 ? 's' : ''} con posiciones sin redimir en ${externalMarkets.length} mercado${externalMarkets.length !== 1 ? 's' : ''}.`}
+        {filtered.length === 0
+          ? 'No hay mercados con liquidez o retiros pendientes.'
+          : `${filtered.length} mercado${filtered.length !== 1 ? 's' : ''} con liquidez o retiros pendientes.`}
       </p>
 
-      {/* External positions by market */}
-      {totalExternal === 0 && !hasAnyOwned ? (
-        <div className="text-center py-12 text-gray-400">Sin retiros pendientes</div>
+      {filtered.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">Sin pendientes</div>
       ) : (
         <>
           <div className="space-y-4">
-            {externalMarkets.map((s) => {
-              const resolvedOutcome = s.outcomes.length >= s.resolvedTo
+            {filtered.map((s) => {
+              const resolvedOutcome = s.outcomes.length >= s.resolvedTo && s.resolvedTo > 0
                 ? s.outcomes[s.resolvedTo - 1]
-                : `#${s.resolvedTo}`;
+                : s.resolvedTo > 0 ? `#${s.resolvedTo}` : null;
+
+              const hasPendingBalance = s.pendingBalance && parseFloat(s.pendingBalance) > 0;
+              const withdrawalStatus = s.withdrawal?.withdrawnAt
+                ? 'withdrawn'
+                : s.withdrawal?.ownershipTransferredAt
+                ? 'in_progress'
+                : 'pending';
 
               return (
-                <div key={s.marketAddress} className="bg-white rounded-lg border border-gray-200">
+                <div key={s.onchainId || s.marketAddress} className="bg-white rounded-lg border border-gray-200">
                   <div className="px-4 py-3 border-b border-gray-100 flex items-start justify-between gap-4">
                     <div className="min-w-0 flex-1">
                       {s.dbId ? (
@@ -279,35 +280,53 @@ export function RedemptionsView({ markets, ownedAddresses, basescanUrl }: Props)
                       ) : (
                         <span className="text-gray-700 font-medium text-sm">{s.marketName}</span>
                       )}
-                      <span className="block text-xs text-gray-400 font-mono mt-0.5">{addr(s.marketAddress)}</span>
+                      {s.marketAddress && (
+                        <span className="block text-xs text-gray-400 font-mono mt-0.5">{addr(s.marketAddress)}</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
-                      <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                        {resolvedOutcome}
-                      </span>
-                      <span className="text-xs text-amber-600 font-semibold">
-                        {s.external.length} sin redimir
-                      </span>
+                      {resolvedOutcome && (
+                        <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          {resolvedOutcome}
+                        </span>
+                      )}
+                      {hasPendingBalance && (
+                        <span className="text-xs text-gray-700 font-mono font-semibold">
+                          {formatUsdc(s.pendingBalance!)}
+                        </span>
+                      )}
+                      {hasPendingBalance && withdrawalStatus === 'in_progress' && (
+                        <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                          Retiro en progreso
+                        </span>
+                      )}
+                      {hasPendingBalance && withdrawalStatus === 'pending' && (
+                        <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                          Liquidez pendiente
+                        </span>
+                      )}
+                      {s.external.length > 0 && (
+                        <span className="text-xs text-amber-600 font-semibold">
+                          {s.external.length} sin redimir
+                        </span>
+                      )}
                       {s.owned.length > 0 && (
                         <span className="text-xs text-gray-400">
                           +{s.owned.length} propias
                         </span>
                       )}
-                      {s.pendingBalance && parseFloat(s.pendingBalance) > 0 && (
-                        <span className="text-xs text-gray-500 font-mono">
-                          Balance: {formatUsdc(s.pendingBalance)}
-                        </span>
-                      )}
                     </div>
                   </div>
-                  <PositionsTable positions={s.external} basescanUrl={basescanUrl} />
+                  {s.external.length > 0 && (
+                    <PositionsTable positions={s.external} basescanUrl={basescanUrl} />
+                  )}
                 </div>
               );
             })}
           </div>
 
           {/* Owned-only section */}
-          {(hasAnyOwned) && (
+          {hasAnyOwned && (
             <div className="mt-6">
               <button
                 onClick={() => setShowOwned(!showOwned)}
@@ -318,19 +337,19 @@ export function RedemptionsView({ markets, ownedAddresses, basescanUrl }: Props)
 
               {showOwned && (
                 <div className="space-y-3 mt-3">
-                  {[...externalMarkets.filter((m) => m.owned.length > 0), ...ownedOnly].map((s) => {
-                    const resolvedOutcome = s.outcomes.length >= s.resolvedTo
+                  {filtered.filter((m) => m.owned.length > 0).map((s) => {
+                    const resolvedOutcome = s.outcomes.length >= s.resolvedTo && s.resolvedTo > 0
                       ? s.outcomes[s.resolvedTo - 1]
-                      : `#${s.resolvedTo}`;
+                      : s.resolvedTo > 0 ? `#${s.resolvedTo}` : null;
 
                     return (
-                      <div key={`owned-${s.marketAddress}`} className="bg-gray-50 rounded-lg border border-gray-100">
+                      <div key={`owned-${s.onchainId || s.marketAddress}`} className="bg-gray-50 rounded-lg border border-gray-100">
                         <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between gap-4">
                           <span className="text-xs text-gray-500 truncate">
                             {s.dbTitle ?? s.marketName}
                           </span>
                           <span className="text-xs text-gray-400">
-                            {resolvedOutcome} — {s.owned.length} posicion{s.owned.length !== 1 ? 'es' : ''}
+                            {resolvedOutcome ?? '—'} — {s.owned.length} posicion{s.owned.length !== 1 ? 'es' : ''}
                           </span>
                         </div>
                         <PositionsTable positions={s.owned} basescanUrl={basescanUrl} muted />
