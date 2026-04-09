@@ -259,7 +259,7 @@ export function DeployMarketButton({ marketId }: Props) {
     : 'Publicar onchain';
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    <>
       <button
         onClick={() => {
           if (step === 'idle' || step === 'error') {
@@ -267,7 +267,7 @@ export function DeployMarketButton({ marketId }: Props) {
           }
         }}
         disabled={busy || step === 'done'}
-        className="px-3 py-1.5 text-xs font-medium rounded-lg border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 cursor-pointer"
+        className="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50 border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 cursor-pointer"
       >
         {label}
       </button>
@@ -278,6 +278,6 @@ export function DeployMarketButton({ marketId }: Props) {
       )}
       {step === 'done' && <span className="text-xs text-green-600">OK</span>}
       {error && <span className="text-xs text-red-500 max-w-xs truncate" title={error}>Error: {error.slice(0, 60)}</span>}
-    </div>
+    </>
   );
 }

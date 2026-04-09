@@ -201,7 +201,7 @@ export default async function MarketDetailPage({ params }: Props) {
       </Link>
 
       {/* Actions */}
-      <div className="mb-4">
+      <div className="mb-4 flex gap-2 flex-wrap items-center">
         <MarketActions
           marketId={market.id}
           status={market.status as Market['status']}
@@ -209,14 +209,10 @@ export default async function MarketDetailPage({ params }: Props) {
           iterations={iterations.length > 0 ? iterations : null}
           isArchived={!!market.isArchived}
         />
-      </div>
-
-      {/* Deploy button for candidates without onchainId */}
-      {market.status === 'candidate' && !market.onchainId && (
-        <div className="mb-4">
+        {market.status === 'candidate' && !market.onchainId && (
           <DeployMarketButton marketId={market.id} />
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="max-w-3xl">
 

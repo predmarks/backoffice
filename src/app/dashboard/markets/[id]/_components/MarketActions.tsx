@@ -57,14 +57,14 @@ export function MarketActions({ marketId, status, iterations, isArchived }: Mark
   const iterationCount = iterations?.length ?? 0;
 
   return (
-    <div className="space-y-3">
-      <div className="flex gap-2 flex-wrap">
+    <>
+      <>
         {status === 'candidate' && (
           <ActionButton
             label="Iniciar Revisión"
             loading={loading === 'review'}
             onClick={() => handleAction(`/api/review/${marketId}`)}
-            variant="primary"
+            variant="indigo"
           />
         )}
 
@@ -77,7 +77,7 @@ export function MarketActions({ marketId, status, iterations, isArchived }: Mark
               label="Cancelar"
               loading={loading === 'cancel'}
               onClick={() => handleAction('cancel')}
-              variant="danger"
+              variant="amber"
             />
           </>
         )}
@@ -87,7 +87,7 @@ export function MarketActions({ marketId, status, iterations, isArchived }: Mark
             label="Reanudar"
             loading={loading === 'resume'}
             onClick={() => handleAction('resume')}
-            variant="primary"
+            variant="violet"
           />
         )}
 
@@ -100,7 +100,7 @@ export function MarketActions({ marketId, status, iterations, isArchived }: Mark
                 body: JSON.stringify({ reason: 'Rejected by reviewer' }),
               })
             }
-            variant="danger"
+            variant="rose"
           />
         )}
 
@@ -109,7 +109,7 @@ export function MarketActions({ marketId, status, iterations, isArchived }: Mark
             label="Archivar"
             loading={loading === 'archive'}
             onClick={() => handleAction('archive')}
-            variant="secondary"
+            variant="slate"
           />
         )}
 
@@ -118,12 +118,12 @@ export function MarketActions({ marketId, status, iterations, isArchived }: Mark
             label="Desarchivar"
             loading={loading === 'unarchive'}
             onClick={() => handleAction('unarchive')}
-            variant="secondary"
+            variant="slate"
           />
         )}
-      </div>
+      </>
       {error && <p className="text-sm text-red-600">{error}</p>}
-    </div>
+    </>
   );
 }
 
@@ -136,13 +136,14 @@ function ActionButton({
   label: string;
   loading: boolean;
   onClick: () => void;
-  variant: 'primary' | 'success' | 'danger' | 'secondary';
+  variant: 'indigo' | 'violet' | 'rose' | 'amber' | 'slate';
 }) {
   const styles = {
-    primary: 'bg-blue-600 hover:bg-blue-700 text-white',
-    success: 'bg-green-600 hover:bg-green-700 text-white',
-    danger: 'bg-red-600 hover:bg-red-700 text-white',
-    secondary: 'bg-gray-200 hover:bg-gray-300 text-gray-800',
+    indigo: 'border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100',
+    violet: 'border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100',
+    rose: 'border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100',
+    amber: 'border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100',
+    slate: 'border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100',
   };
 
   return (
