@@ -107,6 +107,22 @@ export function MiniChat() {
     if (saved) setWidth(Math.min(600, Math.max(280, Number(saved))));
   }, []);
 
+  // Keyboard shortcuts: "c" to open, "Shift+C" to close
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return;
+
+      if (e.key === 'C' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        setOpen(false);
+      } else if (e.key === 'c' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        setOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   function handleResizeStart(e: React.MouseEvent) {
     e.preventDefault();
     dragging.current = true;
