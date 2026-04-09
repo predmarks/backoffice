@@ -8,6 +8,7 @@ import { fetchOnchainMarketData, fetchPendingBalances } from './onchain';
 import { matchMarketsToTopics } from './match-market-topic';
 import { inngest } from '@/inngest/client';
 import { logActivity } from '@/lib/activity-log';
+import { notifyMarketResolved } from './discord';
 import { isTestnet, MAINNET_CHAIN_ID } from './chains';
 import type { SourceContext } from '@/db/types';
 
@@ -212,6 +213,14 @@ export async function syncDeployedMarkets(chainId: number = MAINNET_CHAIN_ID): P
             entityLabel: om.name,
             detail: { outcome, resolvedTo: om.resolvedTo },
             source: 'pipeline',
+          }).catch(() => {});
+
+          notifyMarketResolved({
+            marketId: existing.id,
+            title: om.name,
+            outcome,
+            chainId,
+            onchainId: String(om.onchainId),
           }).catch(() => {});
 
           resolved++;

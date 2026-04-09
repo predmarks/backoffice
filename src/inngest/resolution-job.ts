@@ -4,6 +4,7 @@ import { markets, resolutionFeedback, signals as signalsTable } from '@/db/schem
 import { eq, desc, isNotNull } from 'drizzle-orm';
 import { evaluateResolution } from '@/agents/resolver/evaluator';
 import { logActivity, inngestRunUrl } from '@/lib/activity-log';
+import { notifyResolutionSuggestion } from '@/lib/discord';
 import { setCurrentRunId } from '@/lib/llm';
 import { getRunCost } from '@/lib/usage';
 import type { Resolution } from '@/db/types';
@@ -221,6 +222,20 @@ export const resolutionJob = inngest.createFunction(
         },
         source: 'pipeline',
       });
+
+      if (check.status === 'resolved' || check.isEmergency) {
+        notifyResolutionSuggestion({
+          marketId,
+          title: market.title,
+          suggestedOutcome: check.suggestedOutcome ?? '',
+          confidence: check.confidence,
+          evidence: check.evidence,
+          isEmergency: check.isEmergency,
+          emergencyReason: check.emergencyReason ?? undefined,
+          chainId: market.chainId,
+          onchainId: market.onchainId,
+        }).catch(() => {});
+      }
     });
 
     return {

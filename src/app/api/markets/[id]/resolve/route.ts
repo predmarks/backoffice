@@ -4,6 +4,7 @@ import { markets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import type { Resolution } from '@/db/types';
 import { logActivity } from '@/lib/activity-log';
+import { notifyMarketResolved } from '@/lib/discord';
 import { logMarketEvent } from '@/lib/market-events';
 
 export async function POST(
@@ -71,6 +72,15 @@ export async function POST(
     },
     source: 'ui',
   });
+
+  notifyMarketResolved({
+    marketId: id,
+    title: market.title,
+    outcome,
+    chainId: market.chainId,
+    onchainId: market.onchainId,
+    confirmedBy: resolution.confirmedBy,
+  }).catch(() => {});
 
   return NextResponse.json(updated);
 }

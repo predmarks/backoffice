@@ -3,6 +3,7 @@ import { db } from '@/db/client';
 import { markets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { logActivity } from '@/lib/activity-log';
+import { notifyMarketDeployed, notifyLiquidityWithdrawn } from '@/lib/discord';
 import type { Resolution } from '@/db/types';
 
 const ALLOWED_ACTIONS = [
@@ -28,7 +29,7 @@ export async function POST(
   }
 
   const [market] = await db
-    .select({ id: markets.id, title: markets.title, resolution: markets.resolution })
+    .select({ id: markets.id, title: markets.title, resolution: markets.resolution, chainId: markets.chainId, onchainId: markets.onchainId })
     .from(markets)
     .where(eq(markets.id, id));
 
@@ -45,6 +46,13 @@ export async function POST(
     if (detail.chainId) updates.chainId = Number(detail.chainId);
     if (detail.onchainAddress) updates.onchainAddress = String(detail.onchainAddress);
     await db.update(markets).set(updates).where(eq(markets.id, id));
+
+    notifyMarketDeployed({
+      marketId: id,
+      title: market.title,
+      onchainId: String(detail.onchainId),
+      chainId: detail.chainId ? Number(detail.chainId) : market.chainId,
+    }).catch(() => {});
   }
 
   // Track reporter pending state in resolution object
@@ -101,6 +109,15 @@ export async function POST(
         },
       } as unknown as Resolution,
     }).where(eq(markets.id, id));
+
+    notifyLiquidityWithdrawn({
+      marketId: id,
+      title: market.title,
+      txHash: detail?.txHash,
+      amount: detail?.amount,
+      chainId: market.chainId,
+      onchainId: market.onchainId,
+    }).catch(() => {});
   }
 
   if (action === 'market_ownership_returned') {
