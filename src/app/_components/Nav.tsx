@@ -19,7 +19,7 @@ import {
 import {
   Zap, BookOpen, TrendingUp, Wallet, Mail,
   Radio, Scale, Activity, BarChart3,
-  Settings, ChevronDown, Moon, Sun, Monitor,
+  Settings, ChevronDown, Moon, Sun,
   type LucideProps,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -41,7 +41,7 @@ export function Nav() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { chainId: walletChainId, isConnected } = useAccount();
-  const { setTheme } = useTheme();
+  const { setTheme, resolvedTheme } = useTheme();
 
   const chainParam = searchParams.get('chain');
 
@@ -109,6 +109,7 @@ export function Nav() {
           {/* Sistema dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger
+              openOnHover
               className={cn(
                 'flex items-center gap-1.5 text-sm outline-none',
                 systemActive ? 'text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'
@@ -136,27 +137,15 @@ export function Nav() {
           </DropdownMenu>
 
           {/* Theme toggle */}
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" />}>
-              <Sun size={14} className="rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <Moon size={14} className="absolute rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-              <span className="sr-only">Cambiar tema</span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setTheme('light')}>
-                <Sun size={14} />
-                Claro
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setTheme('dark')}>
-                <Moon size={14} />
-                Oscuro
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setTheme('system')}>
-                <Monitor size={14} />
-                Sistema
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+          >
+            <Sun size={14} className="rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+            <Moon size={14} className="absolute rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+            <span className="sr-only">Cambiar tema</span>
+          </Button>
 
           <WalletButton />
           <form action={logout}>
