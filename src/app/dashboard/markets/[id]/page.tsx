@@ -5,8 +5,9 @@ import Link from 'next/link';
 import { db } from '@/db/client';
 import { markets, marketEvents, activityLog, topics, topicSignals, signals } from '@/db/schema';
 import { eq, asc, desc, inArray } from 'drizzle-orm';
-import type { Market, Iteration, MarketEventType } from '@/db/types';
+import type { Market, Iteration, MarketSnapshot, MarketEventType, ReviewResult } from '@/db/types';
 import { toDeployableMarket } from '@/lib/export';
+import { marketToSnapshot } from '@/lib/market-snapshot';
 import { getBasescanUrl, getPredmarksUrl } from '@/lib/chains';
 import { REPORTER_ADDRESSES as REPORTER_ADDRESSES_PUBLIC } from '@/lib/contracts';
 import { fetchOnchainMarketData, fetchMarketResult } from '@/lib/onchain';
@@ -18,6 +19,7 @@ import { TimingSafetyIndicator } from '../../_components/TimingSafetyIndicator';
 import { MarketActions } from './_components/MarketActions';
 
 import { CopyJsonButton } from './_components/CopyJsonButton';
+import { ExpandableList } from './_components/ExpandableList';
 import { CheckResolutionTrigger } from './_components/CheckResolutionTrigger';
 import { SuggestResolutionButton } from './_components/SuggestResolutionButton';
 import { DeployMarketButton } from './_components/DeployMarketButton';
@@ -26,6 +28,7 @@ import { ResolveOnchainButton } from './_components/ResolveOnchainButton';
 import { WithdrawLiquidityButton } from './_components/WithdrawLiquidityButton';
 import { UnredeemedWinners } from './_components/UnredeemedWinners';
 import { Markdown } from '../../../_components/Markdown';
+import { PendingSuggestion } from './_components/PendingSuggestion';
 
 import { ActivityCard } from '@/app/_components/ActivityCard';
 import { CitedText } from '@/app/_components/CitedText';
@@ -484,6 +487,15 @@ export default async function MarketDetailPage({ params }: Props) {
           </div>
         )}
 
+        {/* Pending pipeline suggestion */}
+        {market.pendingSuggestion && (
+          <PendingSuggestion
+            marketId={market.id}
+            current={marketToSnapshot(market)}
+            suggestion={market.pendingSuggestion as MarketSnapshot}
+          />
+        )}
+
         {/* Diff card: local vs onchain */}
         {market.onchainId && (
           <OnchainActions
@@ -581,68 +593,64 @@ export default async function MarketDetailPage({ params }: Props) {
             )}
           </div>
         </details>
+        <div className="mt-4">
+          <CopyJsonButton json={JSON.stringify(deployable, null, 2)} />
+        </div>
       </div>
 
-      {/* Deployable JSON Preview */}
-      <details className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
-        <summary className="flex items-center justify-between cursor-pointer list-none">
-          <h2 className="text-lg font-bold">JSON</h2>
-          <CopyJsonButton json={JSON.stringify(deployable, null, 2)} />
-        </summary>
-        <pre className="bg-gray-50 rounded-lg p-4 text-sm overflow-x-auto mt-3">
-          {JSON.stringify(deployable, null, 2)}
-        </pre>
-      </details>
+      {/* Reviews */}
+      {(() => {
+        const iterationDates = new Map(
+          events.filter(e => e.type === 'scored' && e.iteration != null)
+            .map(e => [e.iteration!, e.createdAt] as const)
+        );
+        const hasIterations = iterations.length > 0;
+        const hasReviewOnly = !hasIterations && review;
 
-      {/* Iteration History */}
-      {iterations.length > 0 && (
-        <details className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
-          <summary className="text-lg font-bold cursor-pointer list-none">Historial de iteraciones</summary>
-          <div className="mt-4"></div>
-          <div className="space-y-4">
-            {iterations.map((iter) => (
-              <details key={iter.version} className="border border-gray-100 rounded-lg">
-                <summary className="px-4 py-3 cursor-pointer hover:bg-gray-50 flex items-center justify-between">
-                  <span className="font-medium text-sm">
-                    Versión {iter.version}
-                  </span>
-                  <span className="text-sm text-gray-500">
-                    Score: {iter.review.scores.overallScore.toFixed(1)}/10
-                  </span>
-                </summary>
-                <div className="px-4 pb-4 space-y-3">
-                  <div className="text-sm">
-                    <strong>Título:</strong> {iter.market.title}
-                  </div>
-                  {iter.feedback && (
-                    <div>
-                      <strong className="text-sm">Feedback:</strong>
-                      <pre className="mt-1 text-xs text-gray-600 whitespace-pre-wrap bg-gray-50 rounded p-2">
-                        {iter.feedback}
-                      </pre>
-                    </div>
-                  )}
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>Ambigüedad: {iter.review.scores.ambiguity}/10</div>
-                    <div>Timing: {iter.review.scores.timingSafety}/10</div>
-                    <div>Actualidad: {iter.review.scores.timeliness}/10</div>
-                    <div>Volumen: {iter.review.scores.volumePotential}/10</div>
-                  </div>
-                  {iter.review.hardRuleResults.filter((r) => !r.passed).length > 0 && (
-                    <div className="text-xs">
-                      <strong>Reglas fallidas:</strong>{' '}
-                      {iter.review.hardRuleResults
-                        .filter((r) => !r.passed)
-                        .map((r) => r.ruleId)
-                        .join(', ')}
-                    </div>
-                  )}
+        if (!hasIterations && !hasReviewOnly) return null;
+
+        return (
+          <details open className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
+            <summary className="text-lg font-bold cursor-pointer list-none">Revisiones</summary>
+            <div className="mt-4 space-y-4">
+              {hasReviewOnly && (
+                <div className="border border-gray-100 rounded-lg px-4 py-4">
+                  <ReviewDetail review={review} />
                 </div>
-              </details>
-            ))}
-          </div>
-        </details>
-      )}
+              )}
+              {iterations.map((iter, idx) => (
+                <details key={iter.version} className="border border-gray-100 rounded-lg" open={idx === iterations.length - 1}>
+                  <summary className="px-4 py-3 cursor-pointer hover:bg-gray-50 flex items-center justify-between">
+                    <span className="font-medium text-sm">
+                      Versión {iter.version}
+                    </span>
+                    <span className="text-sm text-gray-500">
+                      {iterationDates.get(iter.version) && (
+                        <span className="mr-3 text-gray-400">{formatEventTime(iterationDates.get(iter.version)!, tz)}</span>
+                      )}
+                      Score: {iter.review.scores.overallScore.toFixed(1)}/10
+                    </span>
+                  </summary>
+                  <div className="px-4 pb-4 space-y-3">
+                    <div className="text-sm">
+                      <strong>Título:</strong> {iter.market.title}
+                    </div>
+                    {iter.feedback && (
+                      <div>
+                        <strong className="text-sm">Feedback:</strong>
+                        <pre className="mt-1 text-xs text-gray-600 whitespace-pre-wrap bg-gray-50 rounded p-2">
+                          {iter.feedback}
+                        </pre>
+                      </div>
+                    )}
+                    <ReviewDetail review={iter.review} />
+                  </div>
+                </details>
+              ))}
+            </div>
+          </details>
+        );
+      })()}
 
       {/* Activity Timeline */}
       {(() => {
@@ -656,163 +664,68 @@ export default async function MarketDetailPage({ params }: Props) {
         if (timeline.length === 0) return null;
 
         return (
-          <details className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
+          <details open className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
             <summary className="text-lg font-bold cursor-pointer list-none">Actividad</summary>
             <div className="mt-4">
               <ul className="border-l-2 border-gray-200 ml-2 space-y-0">
-                {timeline.map((entry) => (
-                  <li key={entry.id} className="relative pl-5 py-1.5">
-                    <span className="absolute -left-[5px] top-2.5 w-2 h-2 rounded-full bg-gray-400" />
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-xs text-gray-400 shrink-0 font-mono">
-                        {formatEventTime(entry.time, tz)}
-                      </span>
-                      {entry.source === 'event' && entry.event && (
-                        <span className="text-sm text-gray-700">
-                          {formatEvent(entry.event.type as MarketEventType, entry.event.iteration, entry.event.detail as Record<string, unknown> | null)}
+                <ExpandableList>
+                  {timeline.map((entry) => (
+                    <li key={entry.id} className="relative pl-5 py-1.5">
+                      <span className="absolute -left-[5px] top-2.5 w-2 h-2 rounded-full bg-gray-400" />
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-xs text-gray-400 shrink-0 font-mono">
+                          {formatEventTime(entry.time, tz)}
                         </span>
-                      )}
-                      {entry.source === 'activity' && entry.activity && (
-                        <div className="flex-1 -mt-0.5">
-                          <ActivityCard entry={{ ...entry.activity, detail: entry.activity.detail as Record<string, unknown> | null, createdAt: entry.activity.createdAt.toISOString() }} />
-                        </div>
-                      )}
-                    </div>
-                  </li>
-                ))}
+                        {entry.source === 'event' && entry.event && (
+                          <span className="text-sm text-gray-700">
+                            {formatEvent(entry.event.type as MarketEventType, entry.event.iteration, entry.event.detail as Record<string, unknown> | null)}
+                          </span>
+                        )}
+                        {entry.source === 'activity' && entry.activity && (
+                          <div className="flex-1 -mt-0.5">
+                            <ActivityCard entry={{ ...entry.activity, detail: entry.activity.detail as Record<string, unknown> | null, createdAt: entry.activity.createdAt.toISOString() }} />
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ExpandableList>
               </ul>
             </div>
           </details>
         );
       })()}
 
-      {/* Review Section */}
-      {review && (
-        <details className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
-          <summary className="text-lg font-bold cursor-pointer list-none">Revisión final</summary>
-          <div className="mt-4"></div>
-
-          {/* Scores */}
-          {review.scores.overallScore > 0 && (
-            <div className="mb-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <ScoreBar label="Ambigüedad" score={review.scores.ambiguity} weight="35%" />
-                <ScoreBar label="Timing" score={review.scores.timingSafety} weight="25%" />
-                <ScoreBar label="Actualidad" score={review.scores.timeliness} weight="20%" />
-                <ScoreBar label="Volumen" score={review.scores.volumePotential} weight="20%" />
-              </div>
-              <div className="mt-2 text-sm font-semibold">
-                Score general: {review.scores.overallScore.toFixed(1)}/10
-              </div>
-            </div>
-          )}
-
-          {/* Hard Rules */}
-          {review.hardRuleResults.length > 0 && (
-            <div className="mb-4">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Reglas estrictas</h3>
-              <div className="space-y-1">
-                {review.hardRuleResults.map((r) => (
-                  <div key={r.ruleId} className="text-sm flex gap-2">
-                    <span>{r.passed ? '\u2705' : '\u274C'}</span>
-                    <span>
-                      <strong>{r.ruleId}</strong>: {r.explanation}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Soft Rules */}
-          {review.softRuleResults.filter((r) => !r.passed).length > 0 && (
-            <div className="mb-4">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Advertencias</h3>
-              <div className="space-y-1">
-                {review.softRuleResults
-                  .filter((r) => !r.passed)
-                  .map((r) => (
-                    <div key={r.ruleId} className="text-sm flex gap-2">
-                      <span>{'\u26A0\uFE0F'}</span>
-                      <span>
-                        <strong>{r.ruleId}</strong>: {r.explanation}
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
-
-          {/* Resolution Source Check */}
-          {review.resolutionSourceCheck && (
-            <div className="mb-4">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">
-                Verificación de fuente
-              </h3>
-              <div className="text-sm space-y-1">
-                <div>
-                  {review.resolutionSourceCheck.exists ? '\u2705' : '\u274C'} Existe
-                  {' \u00B7 '}
-                  {review.resolutionSourceCheck.accessible ? '\u2705' : '\u274C'} Accesible
-                  {' \u00B7 '}
-                  {review.resolutionSourceCheck.publishesRelevantData ? '\u2705' : '\u274C'} Publica datos relevantes
-                </div>
-                {review.resolutionSourceCheck.note && (
-                  <p className="text-gray-600">{review.resolutionSourceCheck.note}</p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Data Verification */}
-          {review.dataVerification.length > 0 && (
-            <div className="mb-4">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">
-                Verificación de datos
-              </h3>
-              {review.dataVerification.map((v, i) => (
-                <div key={i} className="text-sm text-gray-600 mb-1">
-                  {v.isAccurate ? '\u2705' : '\u274C'}{' '}
-                  <span className={!v.isAccurate && v.severity === 'critical' ? 'text-red-600 font-medium' : ''}>
-                    {v.claim}: {v.currentValue}
-                  </span>
-                  {v.source && (
-                    <span className="text-gray-400"> ({v.source})</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </details>
-      )}
 
       {/* Related Signals */}
       {relatedSignals.length > 0 && (
-        <details className="mt-6 bg-white rounded-lg border border-gray-200">
+        <details open className="mt-6 bg-white rounded-lg border border-gray-200">
           <summary className="px-5 py-3 border-b border-gray-100 cursor-pointer list-none">
             <h2 className="text-lg font-bold">Señales relacionadas ({relatedSignals.length})</h2>
           </summary>
           <div className="divide-y divide-gray-50">
-            {relatedSignals.map((s) => {
-              const badge = { news: { label: 'Noticia', cls: 'bg-blue-100 text-blue-700' }, data: { label: 'Dato', cls: 'bg-amber-100 text-amber-700' }, social: { label: 'Social', cls: 'bg-purple-100 text-purple-700' }, event: { label: 'Evento', cls: 'bg-green-100 text-green-700' } }[s.type] ?? { label: s.type, cls: 'bg-gray-100 text-gray-600' };
-              return (
-                <div key={s.id} className="px-5 py-3">
-                  <div className="flex items-start gap-2">
-                    <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium mt-0.5 ${badge.cls}`}>{badge.label}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-400">{s.source}</span>
-                        <span className="text-[10px] text-gray-300">{formatEventTime(s.publishedAt, tz)}</span>
+            <ExpandableList>
+              {relatedSignals.map((s) => {
+                const badge = { news: { label: 'Noticia', cls: 'bg-blue-100 text-blue-700' }, data: { label: 'Dato', cls: 'bg-amber-100 text-amber-700' }, social: { label: 'Social', cls: 'bg-purple-100 text-purple-700' }, event: { label: 'Evento', cls: 'bg-green-100 text-green-700' } }[s.type] ?? { label: s.type, cls: 'bg-gray-100 text-gray-600' };
+                return (
+                  <div key={s.id} className="px-5 py-3">
+                    <div className="flex items-start gap-2">
+                      <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium mt-0.5 ${badge.cls}`}>{badge.label}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400">{s.source}</span>
+                          <span className="text-[10px] text-gray-300">{formatEventTime(s.publishedAt, tz)}</span>
+                        </div>
+                        <p className="text-sm text-gray-800 mt-0.5">
+                          {s.url ? <a href={s.url} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 hover:underline">{s.text}</a> : s.text}
+                        </p>
+                        {s.summary && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{s.summary}</p>}
                       </div>
-                      <p className="text-sm text-gray-800 mt-0.5">
-                        {s.url ? <a href={s.url} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 hover:underline">{s.text}</a> : s.text}
-                      </p>
-                      {s.summary && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{s.summary}</p>}
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </ExpandableList>
           </div>
         </details>
       )}
@@ -928,6 +841,104 @@ function Section({
       <h3 className="text-base font-semibold text-gray-700 mb-1">{title}</h3>
       <div className="text-sm">{children}</div>
     </div>
+  );
+}
+
+function ReviewDetail({ review }: { review: ReviewResult }) {
+  return (
+    <>
+      {/* Scores */}
+      {review.scores.overallScore > 0 && (
+        <div className="mb-4">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <ScoreBar label="Ambigüedad" score={review.scores.ambiguity} weight="35%" />
+            <ScoreBar label="Timing" score={review.scores.timingSafety} weight="25%" />
+            <ScoreBar label="Actualidad" score={review.scores.timeliness} weight="20%" />
+            <ScoreBar label="Volumen" score={review.scores.volumePotential} weight="20%" />
+          </div>
+          <div className="mt-2 text-sm font-semibold">
+            Score general: {review.scores.overallScore.toFixed(1)}/10
+          </div>
+        </div>
+      )}
+
+      {/* Hard Rules */}
+      {review.hardRuleResults.length > 0 && (
+        <div className="mb-4">
+          <h3 className="text-sm font-medium text-gray-500 mb-2">Reglas estrictas</h3>
+          <div className="space-y-1">
+            {review.hardRuleResults.map((r) => (
+              <div key={r.ruleId} className="text-sm flex gap-2">
+                <span>{r.passed ? '\u2705' : '\u274C'}</span>
+                <span>
+                  <strong>{r.ruleId}</strong>: {r.explanation}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Soft Rules */}
+      {review.softRuleResults.filter((r) => !r.passed).length > 0 && (
+        <div className="mb-4">
+          <h3 className="text-sm font-medium text-gray-500 mb-2">Advertencias</h3>
+          <div className="space-y-1">
+            {review.softRuleResults
+              .filter((r) => !r.passed)
+              .map((r) => (
+                <div key={r.ruleId} className="text-sm flex gap-2">
+                  <span>{'\u26A0\uFE0F'}</span>
+                  <span>
+                    <strong>{r.ruleId}</strong>: {r.explanation}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* Resolution Source Check */}
+      {review.resolutionSourceCheck && (
+        <div className="mb-4">
+          <h3 className="text-sm font-medium text-gray-500 mb-2">
+            Verificación de fuente
+          </h3>
+          <div className="text-sm space-y-1">
+            <div>
+              {review.resolutionSourceCheck.exists ? '\u2705' : '\u274C'} Existe
+              {' \u00B7 '}
+              {review.resolutionSourceCheck.accessible ? '\u2705' : '\u274C'} Accesible
+              {' \u00B7 '}
+              {review.resolutionSourceCheck.publishesRelevantData ? '\u2705' : '\u274C'} Publica datos relevantes
+            </div>
+            {review.resolutionSourceCheck.note && (
+              <p className="text-gray-600">{review.resolutionSourceCheck.note}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Data Verification */}
+      {review.dataVerification.length > 0 && (
+        <div className="mb-4">
+          <h3 className="text-sm font-medium text-gray-500 mb-2">
+            Verificación de datos
+          </h3>
+          {review.dataVerification.map((v, i) => (
+            <div key={i} className="text-sm text-gray-600 mb-1">
+              {v.isAccurate ? '\u2705' : '\u274C'}{' '}
+              <span className={!v.isAccurate && v.severity === 'critical' ? 'text-red-600 font-medium' : ''}>
+                {v.claim}: {v.currentValue}
+              </span>
+              {v.source && (
+                <span className="text-gray-400"> ({v.source})</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 

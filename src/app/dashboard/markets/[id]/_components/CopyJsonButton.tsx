@@ -16,7 +16,7 @@ export function CopyJsonButton({ json }: { json: string }) {
       onClick={handleCopy}
       className="px-3 py-1 text-xs font-medium rounded border border-gray-300 hover:bg-gray-50 transition-colors"
     >
-      {copied ? 'Copiado' : 'Copiar'}
+      {copied ? 'Copiado' : 'Copiar JSON'}
     </button>
   );
 }
