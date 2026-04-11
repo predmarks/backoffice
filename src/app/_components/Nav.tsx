@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
   Zap, BookOpen, TrendingUp, Wallet, Mail,
-  Radio, Scale, Activity, BarChart3,
+  Radio, Scale, Activity, BarChart3, LineChart,
   Settings, ChevronDown, Moon, Sun,
   type LucideProps,
 } from 'lucide-react';
@@ -34,6 +34,7 @@ const systemLinks: { href: string; label: string; icon: ComponentType<LucideProp
   { href: '/dashboard/rules', label: 'Reglas', icon: Scale },
   { href: '/dashboard/activity', label: 'Log', icon: Activity },
   { href: '/dashboard/usage', label: 'Uso', icon: BarChart3 },
+  { href: '/dashboard/analytics', label: 'PnL', icon: LineChart },
 ];
 
 export function Nav() {

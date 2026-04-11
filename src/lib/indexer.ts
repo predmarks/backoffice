@@ -333,6 +333,120 @@ export async function fetchOwnedParticipantsByMarket(
   return result;
 }
 
+// --- Detailed owned positions (for PnL analytics) ---
+
+export interface OwnedPositionDetail {
+  marketAddress: string;
+  onchainId: string;
+  resolvedTo: number;
+  account: string;
+  outcome: number;
+  shares: string;
+  invested: string;
+  isRedeemed: boolean;
+}
+
+const OWNED_POSITIONS_DETAILED_QUERY = `
+  query OwnedPositionsDetailed($limit: Int!, $skip: Int!, $accounts: [String!]!) {
+    accountPositions(
+      first: $limit
+      skip: $skip
+      where: { account_in: $accounts, shares_gt: "0" }
+    ) {
+      market { id onchainId resolvedTo }
+      account
+      outcome
+      shares
+      invested
+      isRedeemed
+    }
+  }
+`;
+
+type RawOwnedPositionDetail = {
+  market: { id: string; onchainId: string; resolvedTo: string | number };
+  account: string;
+  outcome: string | number;
+  shares: string;
+  invested: string;
+  isRedeemed: boolean;
+};
+
+export async function fetchOwnedPositionsDetailed(
+  chainId: number,
+  ownedAddresses: string[],
+): Promise<OwnedPositionDetail[]> {
+  if (ownedAddresses.length === 0) return [];
+
+  const accounts = ownedAddresses.map((a) => a.toLowerCase());
+  const all: OwnedPositionDetail[] = [];
+  let skip = 0;
+
+  while (true) {
+    const { accountPositions } = await queryIndexer<{ accountPositions: RawOwnedPositionDetail[] }>(
+      chainId,
+      OWNED_POSITIONS_DETAILED_QUERY,
+      { limit: PAGE_SIZE, skip, accounts },
+    );
+    all.push(
+      ...accountPositions.map((p) => ({
+        marketAddress: p.market.id.toLowerCase(),
+        onchainId: p.market.onchainId,
+        resolvedTo: Number(p.market.resolvedTo),
+        account: p.account,
+        outcome: Number(p.outcome),
+        shares: p.shares,
+        invested: p.invested,
+        isRedeemed: p.isRedeemed,
+      })),
+    );
+    if (accountPositions.length < PAGE_SIZE) break;
+    skip += PAGE_SIZE;
+  }
+
+  return all;
+}
+
+// --- Market creation tx hashes (for seeded amount lookup) ---
+
+const MARKET_TX_HASHES_QUERY = `
+  query MarketTxHashes($addresses: [String!]!) {
+    markets(where: { id_in: $addresses }) {
+      id
+      txHash
+    }
+  }
+`;
+
+/**
+ * Fetch creation transaction hashes for markets by their onchain address.
+ * Returns a Map of marketAddress (lowercase) -> txHash.
+ */
+export async function fetchMarketTxHashes(
+  chainId: number,
+  marketAddresses: string[],
+): Promise<Map<string, string>> {
+  if (marketAddresses.length === 0) return new Map();
+
+  const addresses = marketAddresses.map((a) => a.toLowerCase());
+  const result = new Map<string, string>();
+
+  // Query in batches (subgraph may limit array size)
+  for (let i = 0; i < addresses.length; i += PAGE_SIZE) {
+    const batch = addresses.slice(i, i + PAGE_SIZE);
+    const { markets } = await queryIndexer<{ markets: { id: string; txHash: string }[] }>(
+      chainId,
+      MARKET_TX_HASHES_QUERY,
+      { addresses: batch },
+    );
+    for (const m of markets) {
+      result.set(m.id.toLowerCase(), m.txHash);
+    }
+  }
+
+  return result;
+}
+
 export async function fetchOnchainMarkets(chainId: number, options?: FetchMarketsOptions): Promise<OnchainMarket[]> {
   const all: OnchainMarket[] = [];
   let skip = 0;

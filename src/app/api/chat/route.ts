@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { db } from '@/db/client';
-import { topics, markets, signals, conversations, topicSignals, globalFeedback, resolutionFeedback, rules as rulesTable, activityLog, config, signalSources, newsletters } from '@/db/schema';
+import { topics, markets, signals, conversations, topicSignals, globalFeedback, resolutionFeedback, rules as rulesTable, activityLog, marketEvents, config, signalSources, newsletters } from '@/db/schema';
 import { eq, desc, sql, and, gt, inArray } from 'drizzle-orm';
 import { rescoreTopic } from '@/agents/sourcer/scorer';
 import { loadRules } from '@/config/rules';
@@ -55,7 +55,9 @@ PERSONALIDAD:
 - NUNCA listes tus herramientas ni hagas bullet points de capacidades. Sos un colega, no un manual.
 
 OPERACIONES BARATAS (ejecutar sin pedir confirmación):
-- Consultas (lookup_topic, lookup_market, lookup_signals): usá proactivamente cuando el usuario menciona un tema o mercado.
+- Consultas (lookup_topic, lookup_market, lookup_signals, lookup_activity, lookup_market_events): usá proactivamente cuando el usuario menciona un tema o mercado.
+- lookup_activity: para ver qué pasó en la plataforma (deployments, withdrawals, feedback, investigaciones, etc.). Filtrable por entityType, entityId, action.
+- lookup_market_events: para ver el historial completo del pipeline de un mercado (etapas, reviews, ediciones, feedback).
 - Modificaciones directas (update_topic, update_market, update_newsletter, save_feedback, link_signal_to_topic, add_angle): ejecutá inmediatamente.
 - Newsletter (lookup_newsletter, update_newsletter): para editar newsletters SIEMPRE usá update_newsletter. Nunca imprimas el contenido modificado como texto — guardalo con la herramienta.
 - Para feedback: guardalo con save_feedback. Si tiene valor general, extraé aprendizajes globales.
@@ -184,7 +186,12 @@ async function buildMarketContext(marketId: string, tz: string = 'America/Argent
   }
 
   // Resolution & review info
-  const resolution = market.resolution as { suggestedOutcome?: string; confidence?: string; confirmedAt?: string } | null;
+  const resolution = market.resolution as {
+    suggestedOutcome?: string; confidence?: string; evidence?: string; evidenceUrls?: string[];
+    flaggedAt?: string; confirmedAt?: string; resolvedOnchainAt?: string; checkingAt?: string;
+    reporterPending?: boolean;
+    withdrawal?: { ownershipTransferredAt?: string; ownershipTransferTxHash?: string; withdrawnAt?: string; withdrawTxHash?: string; tokenAddress?: string; ownershipReturnedAt?: string; ownershipReturnTxHash?: string };
+  } | null;
   const review = market.review as { scores?: { overallScore?: number }; recommendation?: string } | null;
 
   let resolutionContext = '';
@@ -193,6 +200,31 @@ async function buildMarketContext(marketId: string, tz: string = 'America/Argent
   }
   if (resolution?.suggestedOutcome && !market.outcome) {
     resolutionContext = `\n- Resolución sugerida: ${resolution.suggestedOutcome} (confianza: ${resolution.confidence ?? 'unknown'})`;
+  }
+  if (resolution?.evidence) {
+    resolutionContext += `\n- Evidencia: ${resolution.evidence}`;
+  }
+  if (resolution?.evidenceUrls?.length) {
+    resolutionContext += `\n- URLs evidencia: ${resolution.evidenceUrls.join(', ')}`;
+  }
+  if (resolution?.flaggedAt) resolutionContext += `\n- Flaggeado: ${resolution.flaggedAt}`;
+  if (resolution?.confirmedAt) resolutionContext += `\n- Confirmado: ${resolution.confirmedAt}`;
+  if (resolution?.resolvedOnchainAt) resolutionContext += `\n- Resuelto onchain: ${resolution.resolvedOnchainAt}`;
+  if (resolution?.checkingAt) resolutionContext += `\n- Verificando desde: ${resolution.checkingAt}`;
+  if (resolution?.reporterPending) resolutionContext += `\n- Reporter pending: sí`;
+
+  // Withdrawal status
+  let withdrawalContext = '';
+  const w = resolution?.withdrawal;
+  if (w) {
+    const parts: string[] = [];
+    if (w.tokenAddress) parts.push(`Token: ${w.tokenAddress}`);
+    if (w.ownershipTransferredAt) parts.push(`Ownership transferido: ${w.ownershipTransferredAt}${w.ownershipTransferTxHash ? ` (tx: ${w.ownershipTransferTxHash})` : ''}`);
+    if (w.withdrawnAt) parts.push(`Liquidez retirada: ${w.withdrawnAt}${w.withdrawTxHash ? ` (tx: ${w.withdrawTxHash})` : ''}`);
+    if (w.ownershipReturnedAt) parts.push(`Ownership devuelto: ${w.ownershipReturnedAt}${w.ownershipReturnTxHash ? ` (tx: ${w.ownershipReturnTxHash})` : ''}`);
+    if (parts.length > 0) {
+      withdrawalContext = `\n\nESTADO WITHDRAWAL:\n${parts.map(p => `- ${p}`).join('\n')}`;
+    }
   }
 
   let reviewContext = '';
@@ -205,6 +237,38 @@ async function buildMarketContext(marketId: string, tz: string = 'America/Argent
     onchainContext = `\n- Onchain ID: #${market.onchainId}${market.volume ? `, Volumen: ${market.volume}` : ''}${market.participants ? `, Participantes: ${market.participants}` : ''}`;
   }
 
+  // Iterations / revision history
+  let iterationsContext = '';
+  const iters = (market.iterations ?? []) as Array<{ version?: number; review?: { scores?: { overallScore?: number }; recommendation?: string }; feedback?: string; changes?: string }>;
+  if (iters.length > 0) {
+    const iterLines = iters.map((it) => {
+      const parts: string[] = [`v${it.version ?? '?'}`];
+      if (it.review?.scores?.overallScore != null) parts.push(`score: ${it.review.scores.overallScore}/10`);
+      if (it.review?.recommendation) parts.push(it.review.recommendation);
+      if (it.feedback) parts.push(`feedback: "${it.feedback}"`);
+      if (it.changes) parts.push(`cambios: ${it.changes}`);
+      return `- ${parts.join(' | ')}`;
+    });
+    iterationsContext = `\n\nHISTORIAL DE REVISIONES (${iters.length}):\n${iterLines.join('\n')}`;
+  }
+
+  // Market events (pipeline history)
+  let eventsContext = '';
+  const events = await db
+    .select({ type: marketEvents.type, iteration: marketEvents.iteration, detail: marketEvents.detail, createdAt: marketEvents.createdAt })
+    .from(marketEvents)
+    .where(eq(marketEvents.marketId, market.id))
+    .orderBy(desc(marketEvents.createdAt))
+    .limit(20);
+  if (events.length > 0) {
+    const eventLines = events.map((e) => {
+      const date = e.createdAt.toISOString().split('T')[0];
+      const detailStr = e.detail ? ` — ${JSON.stringify(e.detail).slice(0, 120)}` : '';
+      return `- [${date}] ${e.type}${e.iteration != null ? ` (v${e.iteration})` : ''}${detailStr}`;
+    });
+    eventsContext = `\n\nEVENTOS DEL MERCADO (últimos ${events.length}):\n${eventLines.join('\n')}`;
+  }
+
   return `CONTEXTO: MERCADO
 - Título: ${market.title}
 - Categoría: ${market.category}
@@ -215,7 +279,7 @@ async function buildMarketContext(marketId: string, tz: string = 'America/Argent
 - Fuente de resolución: ${market.resolutionSource}
 - Contingencias: ${market.contingencies}
 - Cierre: ${new Date(market.endTimestamp * 1000).toLocaleString('es-AR', { timeZone: tz })} (timestamp: ${market.endTimestamp})
-- Fecha resolución esperada: ${market.expectedResolutionDate ?? 'no definida'}${resolutionContext}${reviewContext}${onchainContext}${topicsContext}${signalsContext}${diffContext}`;
+- Fecha resolución esperada: ${market.expectedResolutionDate ?? 'no definida'}${resolutionContext}${reviewContext}${onchainContext}${withdrawalContext}${iterationsContext}${topicsContext}${signalsContext}${diffContext}${eventsContext}`;
 }
 
 async function buildSignalContext(signalId: string): Promise<string> {
@@ -287,6 +351,45 @@ async function loadSignalsSummary(): Promise<string> {
   return `\nSEÑALES RECIENTES (${allSignals.length}):\n${lines.join('\n')}`;
 }
 
+async function loadCompletedInvestigations(messages: ChatMessage[]): Promise<string> {
+  const allIds = messages.flatMap((m) => m.activityIds ?? []);
+  if (allIds.length === 0) return '';
+
+  // Find topic_research_started entries from this conversation
+  const startedEntries = await db
+    .select({ id: activityLog.id, entityId: activityLog.entityId, entityLabel: activityLog.entityLabel, createdAt: activityLog.createdAt })
+    .from(activityLog)
+    .where(and(inArray(activityLog.id, allIds), eq(activityLog.action, 'topic_research_started')));
+
+  if (startedEntries.length === 0) return '';
+
+  // Find matching completed entries
+  const descriptions = startedEntries.map((e) => e.entityLabel).filter(Boolean) as string[];
+  const earliest = startedEntries.reduce((min, e) => (e.createdAt < min ? e.createdAt : min), startedEntries[0].createdAt);
+
+  const completedEntries = await db
+    .select({ detail: activityLog.detail, entityLabel: activityLog.entityLabel })
+    .from(activityLog)
+    .where(and(
+      eq(activityLog.action, 'topic_research_completed'),
+      gt(activityLog.createdAt, earliest),
+      sql`${activityLog.detail}->>'description' IN (${sql.join(descriptions.map(d => sql`${d}`), sql`, `)})`,
+    ));
+
+  if (completedEntries.length === 0) return '';
+
+  const sections = completedEntries.map((entry) => {
+    const detail = entry.detail as Record<string, unknown> | null;
+    const description = (detail?.description as string) ?? entry.entityLabel ?? 'investigación';
+    const signalCount = (detail?.signalCount as number) ?? 0;
+    const sigs = (detail?.signals as Array<{ source: string; text: string; url?: string | null }>) ?? [];
+    const sigLines = sigs.map((s) => `- [${s.source}] ${s.text}${s.url ? ` (${s.url})` : ''}`).join('\n');
+    return `## "${description}"\nSe encontraron ${signalCount} señales:\n${sigLines}`;
+  });
+
+  return `\nRESULTADOS DE INVESTIGACIONES COMPLETADAS:\nLas siguientes investigaciones que lanzaste en esta conversación ya terminaron:\n\n${sections.join('\n\n')}\n\nUsá estos resultados para responder al usuario. NO digas que los resultados no están disponibles.\n`;
+}
+
 // --- Claude tools ---
 
 const TOOLS: Anthropic.Tool[] = [
@@ -318,6 +421,30 @@ const TOOLS: Anthropic.Tool[] = [
         category: { type: 'string' as const, description: 'Filter by category' },
         limit: { type: 'number' as const, description: 'Max results (default 20)' },
       },
+    },
+  },
+  {
+    name: 'lookup_activity',
+    description: 'Query the activity log. Returns recent actions across the platform (deployments, withdrawals, feedback, status changes, research, etc.).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        entityType: { type: 'string' as const, description: 'Filter by entity type: market, topic, signal, system' },
+        entityId: { type: 'string' as const, description: 'Filter by specific entity ID' },
+        action: { type: 'string' as const, description: 'Filter by action type' },
+        limit: { type: 'number' as const, description: 'Max results (default 20, max 50)' },
+      },
+    },
+  },
+  {
+    name: 'lookup_market_events',
+    description: 'Get the full pipeline event history for a market (pipeline stages, reviews, human edits, feedback, status changes).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        marketId: { type: 'string' as const, description: 'Market ID' },
+      },
+      required: ['marketId'],
     },
   },
   {
@@ -776,6 +903,48 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     return rows.map((s) =>
       `- [${s.id}] [${s.type}] [${s.source}] ${s.text} | cat:${s.category ?? '?'} | score:${s.score ?? '?'} | ${s.publishedAt.toISOString().split('T')[0]}${s.summary ? `\n  Resumen: ${s.summary}` : ''}`
     ).join('\n');
+  }
+
+  if (block.name === 'lookup_activity') {
+    const { entityType: et, entityId: eid, action: act, limit: lim } = block.input as { entityType?: string; entityId?: string; action?: string; limit?: number };
+    const maxResults = Math.min(lim ?? 20, 50);
+    const conditions = [];
+    if (et) conditions.push(eq(activityLog.entityType, et));
+    if (eid) conditions.push(eq(activityLog.entityId, eid));
+    if (act) conditions.push(eq(activityLog.action, act));
+
+    const rows = await db
+      .select({ id: activityLog.id, action: activityLog.action, entityType: activityLog.entityType, entityLabel: activityLog.entityLabel, detail: activityLog.detail, source: activityLog.source, createdAt: activityLog.createdAt })
+      .from(activityLog)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(activityLog.createdAt))
+      .limit(maxResults);
+
+    if (rows.length === 0) return 'No se encontró actividad.';
+    return rows.map((r) => {
+      const date = r.createdAt.toISOString().replace('T', ' ').slice(0, 16);
+      const detailStr = r.detail ? ` — ${JSON.stringify(r.detail).slice(0, 150)}` : '';
+      return `- [${date}] ${r.action} | ${r.entityType}${r.entityLabel ? `: ${r.entityLabel}` : ''} | source: ${r.source}${detailStr}`;
+    }).join('\n');
+  }
+
+  if (block.name === 'lookup_market_events') {
+    const { marketId: mid } = block.input as { marketId: string };
+    const resolvedId = (contextType === 'market' && contextId) ? contextId : mid;
+
+    const events = await db
+      .select({ type: marketEvents.type, iteration: marketEvents.iteration, detail: marketEvents.detail, createdAt: marketEvents.createdAt })
+      .from(marketEvents)
+      .where(eq(marketEvents.marketId, resolvedId))
+      .orderBy(marketEvents.createdAt)
+      .limit(50);
+
+    if (events.length === 0) return 'Sin eventos para este mercado.';
+    return events.map((e) => {
+      const date = e.createdAt.toISOString().replace('T', ' ').slice(0, 16);
+      const detailStr = e.detail ? ` — ${JSON.stringify(e.detail).slice(0, 150)}` : '';
+      return `- [${date}] ${e.type}${e.iteration != null ? ` (v${e.iteration})` : ''}${detailStr}`;
+    }).join('\n');
   }
 
   // Write tools — execute side effects
@@ -1439,18 +1608,19 @@ export async function POST(request: NextRequest) {
   const rulesContext = `\nREGLAS DE MERCADOS:\nEstrictas:\n${hardRules.map((r) => `- ${r.id}: ${r.description}\n  Check: ${r.check}`).join('\n')}\n\nAdvertencias:\n${softRules.map((r) => `- ${r.id}: ${r.description}\n  Check: ${r.check}`).join('\n')}`;
 
   // Load all topics, markets, and signals for global awareness
-  const [topicsSummary, marketsSummary, signalsSummary, chatPrompt] = await Promise.all([
+  const [topicsSummary, marketsSummary, signalsSummary, chatPrompt, completedInvestigations] = await Promise.all([
     loadTopicsSummary(),
     loadMarketsSummary(),
     loadSignalsSummary(),
     loadChatPrompt(),
+    loadCompletedInvestigations(messages),
   ]);
 
   const pageContextBlock = pageContext
     ? `\nCONTENIDO VISIBLE EN LA PÁGINA (${pageContext.label}):\n${pageContext.content}\n`
     : '';
 
-  const systemMessage = `${chatPrompt}\n\n${entityContext}${pageContextBlock}${topicsSummary}${marketsSummary}${signalsSummary}${rulesContext}${globalContext}`;
+  const systemMessage = `${chatPrompt}\n\n${completedInvestigations}${entityContext}${pageContextBlock}${topicsSummary}${marketsSummary}${signalsSummary}${rulesContext}${globalContext}`;
 
   // Multi-turn tool loop — continues until Claude stops calling tools
   // Restore full API messages (including tool blocks) from previous turns if available
