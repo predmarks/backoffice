@@ -1,13 +1,91 @@
 export const dynamic = 'force-dynamic';
 
+import Link from 'next/link';
 import { getAnalyticsData } from '@/lib/analytics';
 import { validateChainId } from '@/lib/chains';
 import { cn } from '@/lib/utils';
-import PnLChart from './_components/PnLChart';
+import PnLChart, { type PnLChartRow } from './_components/PnLChart';
 import PnLTable from './_components/PnLTable';
+import type { MarketPnL } from '@/lib/analytics';
+
+/** Get the Monday (start of ISO week) for a given date */
+function getWeekMonday(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
+  d.setDate(diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function formatWeekLabel(monday: Date): string {
+  const dd = String(monday.getDate()).padStart(2, '0');
+  const mm = String(monday.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}`;
+}
+
+function groupByWeek(markets: MarketPnL[]): PnLChartRow[] {
+  const weekMap = new Map<string, { label: string; monday: Date | null; rows: MarketPnL[] }>();
+
+  for (const m of markets) {
+    const resolved = m.withdrawnAt;
+    let key: string;
+    let label: string;
+    let monday: Date | null;
+
+    if (resolved) {
+      monday = getWeekMonday(resolved);
+      key = monday.toISOString();
+      label = formatWeekLabel(monday);
+    } else {
+      key = 'pending';
+      label = 'Pendientes';
+      monday = null;
+    }
+
+    const existing = weekMap.get(key);
+    if (existing) {
+      existing.rows.push(m);
+    } else {
+      weekMap.set(key, { label, monday, rows: [m] });
+    }
+  }
+
+  // Sort: dated weeks chronologically, then pendientes at the end
+  const entries = [...weekMap.values()].sort((a, b) => {
+    if (!a.monday && !b.monday) return 0;
+    if (!a.monday) return 1;
+    if (!b.monday) return -1;
+    return a.monday.getTime() - b.monday.getTime();
+  });
+
+  let cumulative = 0;
+  return entries.map((entry) => {
+    const seeded = entry.rows.reduce((s, m) => s + m.seeded, 0);
+    const withdrawn = entry.rows.reduce((s, m) => s + m.withdrawn, 0);
+    const pending = entry.rows.reduce((s, m) => s + m.pending, 0);
+    const ownedPnL = entry.rows.reduce((s, m) => s + m.ownedPnL, 0);
+    const liquidityPnL = entry.rows.reduce((s, m) => s + m.liquidityPnL, 0);
+    const netPnL = entry.rows.reduce((s, m) => s + m.netPnL, 0);
+    cumulative += netPnL;
+
+    return {
+      title: entry.label,
+      seeded,
+      withdrawn,
+      pending,
+      ownedPnL,
+      liquidityPnL,
+      netPnL,
+      cumulativePnL: cumulative,
+      status: '',
+      marketCount: entry.rows.length,
+    };
+  });
+}
 
 interface Props {
-  searchParams: Promise<{ chain?: string }>;
+  searchParams: Promise<{ chain?: string; showOpen?: string }>;
 }
 
 function formatUsd(value: number): string {
@@ -35,6 +113,7 @@ function PnLValue({ value, className }: { value: number; className?: string }) {
 export default async function AnalyticsPage({ searchParams }: Props) {
   const params = await searchParams;
   const chainId = validateChainId(params.chain ? Number(params.chain) : undefined);
+  const showOpen = params.showOpen === '1';
 
   let data;
   try {
@@ -49,7 +128,33 @@ export default async function AnalyticsPage({ searchParams }: Props) {
     );
   }
 
-  const { summary, markets } = data;
+  const allMarkets = data.markets;
+  const filteredMarkets = showOpen
+    ? allMarkets
+    : allMarkets.filter((m) => m.status !== 'open' && m.status !== 'in_resolution');
+
+  // Recompute cumulative PnL on filtered set
+  let cumulative = 0;
+  const markets = filteredMarkets.map((m) => {
+    cumulative += m.netPnL;
+    return { ...m, cumulativePnL: cumulative };
+  });
+
+  const summary = {
+    totalSeeded: markets.reduce((s, m) => s + m.seeded, 0),
+    totalWithdrawn: markets.reduce((s, m) => s + m.withdrawn, 0),
+    totalPending: markets.reduce((s, m) => s + m.pending, 0),
+    totalOwnedPnL: markets.reduce((s, m) => s + m.ownedPnL, 0),
+    totalLiquidityPnL: markets.reduce((s, m) => s + m.liquidityPnL, 0),
+    netPnL: cumulative,
+    marketCount: markets.length,
+  };
+
+  // Build toggle link preserving existing params
+  const toggleParams = new URLSearchParams();
+  if (params.chain) toggleParams.set('chain', params.chain);
+  if (!showOpen) toggleParams.set('showOpen', '1');
+  const toggleHref = `/dashboard/analytics${toggleParams.size > 0 ? `?${toggleParams}` : ''}`;
 
   // Recovery ratio: (withdrawn + pending) / seeded
   const totalRecovered = summary.totalWithdrawn + summary.totalPending;
@@ -59,7 +164,20 @@ export default async function AnalyticsPage({ searchParams }: Props) {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">PnL</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-2xl font-bold">PnL</h1>
+        <Link
+          href={toggleHref}
+          className={cn(
+            'text-xs px-2.5 py-1 rounded-full border transition-colors',
+            showOpen
+              ? 'border-border text-muted-foreground hover:text-foreground'
+              : 'border-primary/30 bg-primary/10 text-primary',
+          )}
+        >
+          {showOpen ? 'Ocultar abiertos' : 'Sin abiertos'}
+        </Link>
+      </div>
 
       {/* Section 1: Global Summary */}
       <div className="bg-card rounded-lg border border-border p-5">
@@ -105,26 +223,16 @@ export default async function AnalyticsPage({ searchParams }: Props) {
         </div>
       </div>
 
-      {/* Section 2: Chart */}
-      <PnLChart
-        data={markets.map((m) => ({
-          title: m.title,
-          seeded: m.seeded,
-          withdrawn: m.withdrawn,
-          pending: m.pending,
-          ownedPnL: m.ownedPnL,
-          liquidityPnL: m.liquidityPnL,
-          netPnL: m.netPnL,
-          cumulativePnL: m.cumulativePnL,
-          status: m.status,
-        }))}
-      />
+      {/* Section 2: Chart — grouped by resolution week */}
+      <PnLChart data={groupByWeek(markets)} />
 
       {/* Section 3: Per-market breakdown */}
       <PnLTable
         markets={markets.map((m) => ({
           marketId: m.marketId,
           onchainId: m.onchainId,
+          onchainAddress: m.onchainAddress,
+          chainId,
           title: m.title,
           status: m.status,
           seeded: m.seeded,

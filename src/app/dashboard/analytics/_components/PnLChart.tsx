@@ -23,6 +23,7 @@ export interface PnLChartRow {
   netPnL: number;
   cumulativePnL: number;
   status: string;
+  marketCount?: number;
 }
 
 function CustomTooltip({
@@ -42,7 +43,12 @@ function CustomTooltip({
 
   return (
     <div className="bg-card border border-border rounded-lg shadow-lg p-3 text-xs max-w-xs">
-      <p className="font-medium text-foreground mb-2 truncate">{label}</p>
+      <p className="font-medium text-foreground mb-2 truncate">
+        Semana del {label}
+        {data.marketCount != null && (
+          <span className="text-muted-foreground font-normal"> · {data.marketCount} mercado{data.marketCount !== 1 ? 's' : ''}</span>
+        )}
+      </p>
       <div className="space-y-1">
         <Row label="Fondeado" value={data.seeded} />
         <Row label="Retirado" value={data.withdrawn} />
@@ -86,19 +92,15 @@ export default function PnLChart({ data }: { data: PnLChartRow[] }) {
 
   return (
     <div className="bg-card rounded-lg border border-border p-5">
-      <h2 className="text-sm font-medium text-muted-foreground mb-4">PnL por mercado</h2>
+      <h2 className="text-sm font-medium text-muted-foreground mb-4">PnL por semana de retiro</h2>
       <ResponsiveContainer width="100%" height={320}>
         <ComposedChart data={data}>
           <XAxis
             dataKey="title"
-            tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
+            tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
             tickLine={false}
             axisLine={{ stroke: 'hsl(var(--border))' }}
             interval={0}
-            angle={-45}
-            textAnchor="end"
-            height={80}
-            tickFormatter={(v: string) => v.length > 18 ? v.slice(0, 18) + '…' : v}
           />
           <YAxis
             tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}

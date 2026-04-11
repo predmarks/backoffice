@@ -3,10 +3,13 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
+import { getPredmarksUrl, getBasescanUrl } from '@/lib/chains';
 
 interface MarketRow {
   marketId: string;
   onchainId: string | null;
+  onchainAddress: string | null;
+  chainId: number;
   title: string;
   status: string;
   seeded: number;
@@ -139,16 +142,40 @@ function Row({ market: m }: { market: MarketRow }) {
       <span className="w-12 text-right font-mono text-muted-foreground/60 shrink-0">
         {m.onchainId ? `#${m.onchainId}` : '—'}
       </span>
-      <Link
-        href={`/dashboard/markets/${m.marketId}`}
-        className="flex-1 min-w-0 truncate text-foreground hover:underline"
-        title={m.title}
-      >
-        {m.title}
-        {isUnrealized && (
-          <span className="ml-1.5 text-amber-500 dark:text-amber-400 text-[10px]">(no realizado)</span>
+      <div className="flex-1 min-w-0 flex items-center gap-1.5">
+        <Link
+          href={`/dashboard/markets/${m.marketId}`}
+          className="truncate text-foreground hover:underline"
+          title={m.title}
+        >
+          {m.title}
+          {isUnrealized && (
+            <span className="ml-1.5 text-amber-500 dark:text-amber-400 text-[10px]">(no realizado)</span>
+          )}
+        </Link>
+        {m.onchainId && (
+          <a
+            href={`${getPredmarksUrl(m.chainId)}/mercados/${m.onchainId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-[10px] text-blue-600 dark:text-blue-400 hover:underline opacity-60 hover:opacity-100"
+            title="Ver en Predmarks"
+          >
+            PM
+          </a>
         )}
-      </Link>
+        {m.onchainAddress && (
+          <a
+            href={`${getBasescanUrl(m.chainId)}/address/${m.onchainAddress}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-[10px] text-blue-600 dark:text-blue-400 hover:underline opacity-60 hover:opacity-100"
+            title="Ver en Basescan"
+          >
+            BS
+          </a>
+        )}
+      </div>
       <span className="w-16 text-right font-mono text-muted-foreground shrink-0">
         {formatUsd(m.seeded)}
       </span>

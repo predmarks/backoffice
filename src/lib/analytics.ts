@@ -14,10 +14,13 @@ import type { Resolution } from '@/db/types';
 export interface MarketPnL {
   marketId: string;
   onchainId: string | null;
+  onchainAddress: string | null;
   title: string;
   category: string;
   status: string;
   date: Date | null;
+  resolvedDate: Date | null;
+  withdrawnAt: Date | null;
   seeded: number;         // USDC (divided by 1e6)
   withdrawn: number;      // USDC withdrawn from market
   pending: number;        // USDC still in market contract
@@ -403,9 +406,12 @@ export async function getAnalyticsData(chainId: number): Promise<AnalyticsData> 
         createdAt: markets.createdAt,
         onchainId: markets.onchainId,
         onchainAddress: markets.onchainAddress,
+        resolvedAt: markets.resolvedAt,
+        closedAt: markets.closedAt,
         pendingBalance: markets.pendingBalance,
         seededAmount: markets.seededAmount,
         withdrawnAmount: markets.withdrawnAmount,
+        resolution: markets.resolution,
         outcomes: markets.outcomes,
       })
       .from(markets)
@@ -440,13 +446,19 @@ export async function getAnalyticsData(chainId: number): Promise<AnalyticsData> 
     const liquidityPnL = (withdrawn + pending) - seeded;
     const netPnL = liquidityPnL + ownedPnL;
 
+    const res = m.resolution as Resolution | null;
+    const withdrawnAtStr = res?.withdrawal?.withdrawnAt;
+
     return {
       marketId: m.id,
       onchainId: m.onchainId,
+      onchainAddress: m.onchainAddress,
       title: m.title,
       category: m.category,
       status: m.status,
       date: m.publishedAt ?? m.createdAt,
+      resolvedDate: m.resolvedAt ?? m.closedAt ?? null,
+      withdrawnAt: withdrawnAtStr ? new Date(withdrawnAtStr) : null,
       seeded,
       withdrawn,
       pending,
