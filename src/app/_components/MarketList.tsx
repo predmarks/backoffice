@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { MAINNET_CHAIN_ID } from '@/lib/chains';
+import { strip } from '@/lib/strip-diacritics';
 
 interface MarketEntry {
   id: string;
@@ -99,7 +100,7 @@ export function MarketList({ markets, chainId }: { markets: MarketEntry[]; chain
   }
 
   const filtered = query
-    ? markets.filter((m) => m.title.toLowerCase().includes(query.toLowerCase()))
+    ? markets.filter((m) => strip(m.title).includes(strip(query)))
     : markets;
 
   const live = filtered.filter((m) => LIVE_STATUSES.includes(m.status)).sort((a, b) => a.endTimestamp - b.endTimestamp);

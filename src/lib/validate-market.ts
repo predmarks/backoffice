@@ -31,6 +31,7 @@ export function validateMarket(market: MarketLike, nowTs?: number): ValidationRe
     const fixed = now + 30 * DAY;
     fixes.endTimestamp = { from: market.endTimestamp, to: fixed, reason: `Timestamp ${market.endTimestamp} (${new Date(market.endTimestamp * 1000).toISOString()}) está en el pasado` };
     market.endTimestamp = fixed;
+    warnings.push(`endTimestamp estaba en el pasado y fue corregido a +30 días — verificar coherencia con el evento`);
   }
 
   // 2. endTimestamp too far (>120 days)

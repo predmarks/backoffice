@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { validateChainId, MAINNET_CHAIN_ID } from '@/lib/chains';
 import { usePageContext } from '@/app/_components/PageContext';
 import { SearchInput } from '@/app/dashboard/_components/SearchInput';
+import { strip } from '@/lib/strip-diacritics';
 
 interface MarketEntry {
   id: string;
@@ -176,8 +177,8 @@ export default function MercadosPage() {
     : statusFiltered;
   const searchFiltered = searchQuery
     ? baseFiltered.filter((m) => {
-        const q = searchQuery.toLowerCase();
-        return m.title.toLowerCase().includes(q) || m.category.toLowerCase().includes(q);
+        const q = strip(searchQuery);
+        return strip(m.title).includes(q) || strip(m.category).includes(q);
       })
     : baseFiltered;
 

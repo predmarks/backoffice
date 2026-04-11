@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, type ComponentType } from 'react';
+import { useEffect, useState, type ComponentType } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAccount } from 'wagmi';
@@ -32,7 +32,6 @@ export function Nav() {
   const searchParams = useSearchParams();
   const { chainId: walletChainId, isConnected } = useAccount();
   const [systemOpen, setSystemOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const chainParam = searchParams.get('chain');
 
@@ -52,17 +51,6 @@ export function Nav() {
       router.replace(`${pathname}${qs ? `?${qs}` : ''}`);
     }
   }, [walletChainId, isConnected, pathname, chainParam, searchParams, router]);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setSystemOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
 
   // Preserve chain param across nav links
   function withChain(href: string): string {
@@ -108,10 +96,9 @@ export function Nav() {
 
         <div className="flex items-center gap-3 shrink-0">
           {/* Sistema dropdown */}
-          <div className="relative" ref={dropdownRef}>
+          <div className="relative" onMouseEnter={() => setSystemOpen(true)} onMouseLeave={() => setSystemOpen(false)}>
             <button
               type="button"
-              onClick={() => setSystemOpen((o) => !o)}
               className={`flex items-center gap-1.5 text-sm ${systemActive ? 'text-gray-900 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
             >
               <Settings size={16} />
@@ -119,21 +106,23 @@ export function Nav() {
               <ChevronDown size={14} className={`transition-transform ${systemOpen ? 'rotate-180' : ''}`} />
             </button>
             {systemOpen && (
-              <div className="absolute right-0 top-full mt-2 w-44 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
-                {systemLinks.map(({ href, label, icon: Icon }) => {
-                  const isActive = pathname.startsWith(href);
-                  return (
-                    <Link
-                      key={href}
-                      href={withChain(href)}
-                      onClick={() => setSystemOpen(false)}
-                      className={`flex items-center gap-2 px-3 py-2 text-sm ${isActive ? 'text-gray-900 font-medium bg-gray-50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'}`}
-                    >
-                      <Icon size={16} />
-                      {label}
-                    </Link>
-                  );
-                })}
+              <div className="absolute right-0 top-full pt-2 w-44 z-50">
+                <div className="bg-white border border-gray-200 rounded-lg shadow-lg py-1">
+                  {systemLinks.map(({ href, label, icon: Icon }) => {
+                    const isActive = pathname.startsWith(href);
+                    return (
+                      <Link
+                        key={href}
+                        href={withChain(href)}
+                        onClick={() => setSystemOpen(false)}
+                        className={`flex items-center gap-2 px-3 py-2 text-sm ${isActive ? 'text-gray-900 font-medium bg-gray-50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'}`}
+                      >
+                        <Icon size={16} />
+                        {label}
+                      </Link>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

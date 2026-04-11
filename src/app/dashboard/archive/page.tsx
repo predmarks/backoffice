@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { db } from '@/db/client';
 import { markets } from '@/db/schema';
-import { eq, and, desc, ilike } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import type { MarketStatus, Review } from '@/db/types';
 import { StatusBadge } from '../_components/StatusBadge';
 
@@ -25,7 +25,8 @@ export default async function ArchivePage({ searchParams }: Props) {
 
   const conditions = [eq(markets.isArchived, true)];
   if (q) {
-    conditions.push(ilike(markets.title, `%${q}%`));
+    const pattern = `%${q}%`;
+    conditions.push(sql`unaccent(${markets.title}) ilike unaccent(${pattern})`);
   }
   if (status) {
     conditions.push(eq(markets.status, status));

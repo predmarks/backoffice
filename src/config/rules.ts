@@ -92,6 +92,19 @@ export const DEFAULT_HARD_RULES: Rule[] = [
       that cover all possibilities, or a complete set of known options).
       Binary markets are exempt from this rule.`,
   },
+  {
+    id: 'H13',
+    type: 'hard',
+    description: 'Market closing date must be coherent with the underlying event timeline',
+    check: `Verify the endTimestamp makes sense for the specific event being predicted:
+      - Sports match: close shortly before kickoff, NOT days/weeks after
+      - Economic data release: close before the publication date
+      - Election/vote: close before polls close
+      - Weather event: close before or on the target date
+      - If the event has a known date, the market closing significantly after it is a FAIL
+      - If the event date is unknown, the closing date should reflect reasonable expectations
+      Search for the actual event date if not obvious from the market data.`,
+  },
 ];
 
 export const DEFAULT_SOFT_RULES: Rule[] = [

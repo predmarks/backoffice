@@ -19,6 +19,8 @@ interface Conversation {
   contextId: string | null;
   title: string;
   messages: ChatMessage[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  apiMessages?: any[] | null;
   updatedAt: string;
 }
 
@@ -90,6 +92,8 @@ export function MiniChat() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [apiMessages, setApiMessages] = useState<any[] | null>(null);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -229,6 +233,7 @@ export function MiniChat() {
   useEffect(() => {
     setActiveConvId(null);
     setMessages([]);
+    setApiMessages(null);
     setError(null);
     setActivityEntries([]);
     setPollingEntries([]);
@@ -290,6 +295,7 @@ export function MiniChat() {
   function handleNewConversation() {
     setActiveConvId(null);
     setMessages([]);
+    setApiMessages(null);
     setError(null);
     setActivityEntries([]);
     setPollingEntries([]);
@@ -301,6 +307,7 @@ export function MiniChat() {
     if (context.id && conv.contextId && conv.contextId !== context.id) return;
     setActiveConvId(conv.id);
     setMessages(conv.messages);
+    setApiMessages(conv.apiMessages ?? null);
     setError(null);
     setActivityEntries([]);
     setPollingEntries([]);
@@ -336,6 +343,7 @@ export function MiniChat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: updatedMessages,
+          apiMessages,
           contextType: context.type,
           contextId: effectiveId,
           conversationId: activeConvId,
@@ -353,8 +361,10 @@ export function MiniChat() {
         throw new Error(errorMsg);
       }
 
-      const { conversation, conversationId, redirect, activityIds } = await res.json();
+      const data = await res.json();
+      const { conversation, conversationId, redirect, activityIds } = data;
       if (conversation) setMessages(conversation);
+      if (data.apiMessages) setApiMessages(data.apiMessages);
       if (conversationId && !activeConvId) setActiveConvId(conversationId);
       fetchConversations();
 

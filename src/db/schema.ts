@@ -11,7 +11,7 @@ import {
   real,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import type { SourceContext, Review, Resolution, Iteration, SourcingStep, MarketEventType } from './types';
+import type { SourceContext, Review, Resolution, Iteration, MarketSnapshot, SourcingStep, MarketEventType } from './types';
 import type { SourceSignal } from '@/agents/sourcer/types';
 
 export const markets = pgTable(
@@ -38,6 +38,7 @@ export const markets = pgTable(
     sourceContext: jsonb('source_context').notNull().$type<SourceContext>(),
     review: jsonb('review').$type<Review>(),
     iterations: jsonb('iterations').$type<Iteration[]>(),
+    pendingSuggestion: jsonb('pending_suggestion').$type<MarketSnapshot>(),
     resolution: jsonb('resolution').$type<Resolution>(),
     isArchived: boolean('is_archived').notNull().default(false),
     onchainId: varchar('onchain_id', { length: 20 }),
@@ -156,6 +157,9 @@ export const conversations = pgTable(
     contextId: uuid('context_id'),
     title: text('title').notNull(),
     messages: jsonb('messages').notNull().default([]).$type<{ role: 'user' | 'assistant'; content: string }[]>(),
+    // Full Anthropic API messages including tool_use/tool_result blocks for multi-turn context
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    apiMessages: jsonb('api_messages').$type<any[]>(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },

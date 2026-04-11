@@ -9,5 +9,4 @@ export const THRESHOLDS = {
   minimumScore: 5.0,
   timingSafetyFloor: 4,
   passingScore: 6.0,
-  maxIterations: 3,
 } as const;

@@ -3,19 +3,19 @@ import { CONTINGENCY_TEMPLATES } from '@/config/contingencies';
 import type { MarketSnapshot, Iteration } from '@/db/types';
 import type { MarketRecord } from './types';
 
-const SYSTEM_PROMPT = `Sos un editor experto de mercados predictivos para Predmarks, una plataforma argentina de mercados de predicción.
-Tu trabajo es mejorar mercados que fallaron la revisión automática, corrigiendo los problemas específicos señalados.
+const SYSTEM_PROMPT = `Sos un corrector minimalista de mercados predictivos para Predmarks.
+Tu trabajo es aplicar correcciones QUIRÚRGICAS a los problemas específicos del feedback. Nada más.
 
-REGLAS:
+PRINCIPIO CENTRAL: Cambiá lo MÍNIMO posible. Si un campo no está mencionado en el feedback, copialo TEXTUALMENTE sin modificar.
+
+REGLAS ESTRICTAS:
+- TÍTULO: NO tocar NUNCA salvo que el feedback cite explícitamente la regla H7. Si H7 falló, hacé la corrección mínima (agregar signo de pregunta, corregir gramática). NUNCA reescribir desde cero.
+- DESCRIPCIÓN: NUNCA agregar información nueva, noticias, contexto actual, ni datos que no estaban. Solo podés: corregir datos inexactos señalados en el feedback, aclarar frases ambiguas, o acortar. La descripción debe REDUCIRSE o mantenerse igual, nunca crecer.
 - NUNCA inventar datos. Si necesitás un número que no tenés, escribí "[VERIFICAR: descripción del dato necesario]".
-- Corregí SOLAMENTE los problemas señalados en el feedback. No cambies lo que estaba bien.
-- NUNCA cambies el tipo de mercado: si el mercado es multi-opción, mantenelo multi-opción. Si es binario, mantenelo binario. Convertir un multi-opción a binario destruye el sentido del mercado.
-- Items marcados [NO CORREGIDO] son problemas que NO se resolvieron en la iteración anterior.
-  Intentá una solución DIFERENTE — el enfoque previo no funcionó. Reenmarcá la pregunta, ajustá criterios o cambiá el ángulo, pero NUNCA cambies el tema central del mercado.
-- NUNCA cambies el tema del mercado. Podés ajustar el ángulo, la pregunta o el encuadre, pero el sujeto central (qué se está prediciendo) debe ser el mismo. Si el mercado es sobre pobreza, no lo conviertas en uno sobre déficit fiscal.
+- NUNCA cambies el tipo de mercado: si es multi-opción, mantenelo multi-opción. Si es binario, mantenelo binario.
+- Items marcados [NO CORREGIDO] son problemas que NO se resolvieron en la iteración anterior. Intentá una corrección más PRECISA del mismo problema — no reencuadres ni cambies el ángulo.
 - Los mercados NUNCA se anulan. Toda contingencia debe resolverse a uno de los outcomes definidos, nunca a "anulado" o "void".
 - Números decimales en outcomes con PUNTO (.) no coma: "34.5%" no "34,5%". Crítico para parseo onchain.
-- Devolvé el mercado completo con todas las mejoras aplicadas.
 - Todo el contenido en español argentino.`;
 
 const OUTPUT_SCHEMA = {
@@ -62,7 +62,10 @@ function formatHistory(history: Iteration[]): string {
   return history
     .map((iter) => {
       const score = iter.review.scores.overallScore.toFixed(1);
-      return `Versión ${iter.version} (score: ${score}/10):\n  Título: ${iter.market.title}\n  Feedback: ${iter.feedback || 'N/A'}`;
+      const changesStr = iter.changes
+        ? `\n  Campos cambiados: ${Object.keys(iter.changes).join(', ')}`
+        : '';
+      return `Versión ${iter.version} (score: ${score}/10):\n  Título: ${iter.market.title}${changesStr}\n  Feedback: ${iter.feedback || 'N/A'}`;
     })
     .join('\n');
 }
@@ -104,10 +107,11 @@ export async function improveMarket(
     ? iterationHistory[0].market.title
     : null;
 
-  const userMessage = `Mejorá este mercado corrigiendo los problemas detectados.
+  const userMessage = `Corregí SOLO los problemas listados en el feedback. No toques nada más.
+
+REGLA DE ORO: Si un campo NO aparece mencionado en el feedback, copialo TEXTUALMENTE del mercado actual. Sin mejoras, sin retoques, sin embellecimiento.
 
 TIPO DE MERCADO: ${marketTypeLabel} — NO cambiar el tipo.
-${originalTitle ? `TEMA ORIGINAL DEL MERCADO: "${originalTitle}" — el tema central NO debe cambiar.\n` : ''}
 
 FEEDBACK DE LA REVISIÓN:
 ${feedback}
@@ -118,13 +122,12 @@ ${formatHistory(iterationHistory)}
 MERCADO ACTUAL:
 ${JSON.stringify(marketSummary, null, 2)}
 
-PRIORIDADES:
-1. TIMING: Si el feedback menciona timing inseguro, reenmarcá para que el mercado
-   NO pueda resolverse mientras está abierto. Ajustá endTimestamp si es necesario.
-2. CRITERIOS: Hacé la resolución hermética con fuente pública, hora argentina, casos borde.
-3. CONTINGENCIAS: Incluí las cláusulas estándar que apliquen.
-4. TÍTULO: Hacelo claro, atractivo, y como pregunta en español argentino. Para binarios: pregunta sí/no. Para multi-opción: pregunta clara sobre lo que se predice.
-5. DESCRIPCIÓN: Contexto en Markdown (negritas, links, listas). Incluir datos actuales y por qué importa.
+QUÉ CORREGIR (solo si el feedback lo menciona):
+1. TIMING: Si el feedback menciona timing inseguro, ajustá endTimestamp para que el mercado NO pueda resolverse mientras está abierto.
+2. CRITERIOS: Si el feedback menciona ambigüedad, hacé la resolución más precisa y concisa. No agregar texto — aclarar o recortar.
+3. CONTINGENCIAS: Si faltan, aplicar las cláusulas estándar que correspondan.
+4. TÍTULO: NO tocar salvo que el feedback cite H7 explícitamente. En ese caso, corrección mínima.
+5. DESCRIPCIÓN: NO agregar información nueva, noticias, ni contexto. Solo corregir datos inexactos señalados o acortar.
 
 Cláusulas de contingencia estándar disponibles:
 ${formatContingencyTemplates()}
@@ -142,7 +145,7 @@ REFERENCIA TIMESTAMPS (para calcular endTimestamp):
 IMPORTANTE: endTimestamp DEBE ser mayor que ${now} (hoy). Si el timestamp actual del mercado es menor, corregilo.`;
 })()}
 
-Devolvé el mercado COMPLETO con todas las mejoras aplicadas.`;
+Devolvé el mercado COMPLETO. Los campos sin problemas deben ser IDÉNTICOS al mercado actual.`;
 
   const { result } = await callClaude<MarketSnapshot>({
     system: SYSTEM_PROMPT,

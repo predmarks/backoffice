@@ -732,7 +732,13 @@ const TOOLS: Anthropic.Tool[] = [
 // --- Tool execution ---
 // Returns tool_result content string for multi-turn
 
-async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextType, contextId: string | null, tz: string = 'America/Argentina/Buenos_Aires'): Promise<string> {
+async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextType, contextId: string | null, tz: string = 'America/Argentina/Buenos_Aires', activityIds: string[] = []): Promise<string> {
+  // Helper: log activity and capture ID for the response
+  async function log(action: string, opts: Parameters<typeof logActivity>[1]) {
+    const id = await logActivity(action, opts);
+    if (id) activityIds.push(id);
+  }
+
   // Lookup tools — return data for Claude to use
   if (block.name === 'lookup_topic') {
     const { topicId } = block.input as { topicId: string };
@@ -810,7 +816,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       const [m] = await db.select({ title: markets.title }).from(markets).where(eq(markets.id, contextId));
       if (m) { contextLabel = m.title; contextUrl = `/dashboard/markets/${contextId}`; }
     }
-    await logActivity('feedback_saved', { entityType: contextType, entityId: contextId ?? undefined, entityLabel: contextLabel, detail: { feedback, entityType: contextType, contextLabel, contextUrl, globalLearnings: global_learnings.length }, source: 'chat' });
+    await log('feedback_saved', { entityType: contextType, entityId: contextId ?? undefined, entityLabel: contextLabel, detail: { feedback, entityType: contextType, contextLabel, contextUrl, globalLearnings: global_learnings.length }, source: 'chat' });
     return 'Feedback guardado.';
   }
 
@@ -825,7 +831,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     if (fields.status) updates.status = fields.status;
     await db.update(topics).set(updates).where(eq(topics.id, topicId as string));
     const [updatedT] = await db.select({ slug: topics.slug, name: topics.name }).from(topics).where(eq(topics.id, topicId as string));
-    await logActivity('topic_updated', { entityType: 'topic', entityId: topicId as string, entityLabel: updatedT?.name ?? (fields.name as string), detail: { ...fields as Record<string, unknown>, topicSlug: updatedT?.slug }, source: 'chat' });
+    await log('topic_updated', { entityType: 'topic', entityId: topicId as string, entityLabel: updatedT?.name ?? (fields.name as string), detail: { ...fields as Record<string, unknown>, topicSlug: updatedT?.slug }, source: 'chat' });
     return 'Tema actualizado.';
   }
 
@@ -867,7 +873,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     const updated = { ...ctx, topicIds: [...existing, topicId] } as SourceContext;
     await db.update(markets).set({ sourceContext: updated }).where(eq(markets.id, marketId));
     await logMarketEvent(marketId, 'human_edited', { detail: { action: 'link_topic', topicId, topicName: topic.name, source: 'chat' } });
-    await logActivity('market_updated', { entityType: 'market', entityId: marketId, entityLabel: market.title, detail: { action: 'linked_topic', topicId, topicName: topic.name }, source: 'chat' });
+    await log('market_updated', { entityType: 'market', entityId: marketId, entityLabel: market.title, detail: { action: 'linked_topic', topicId, topicName: topic.name }, source: 'chat' });
     return `Mercado "${market.title}" asociado a tema "${topic.name}".`;
   }
 
@@ -883,7 +889,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     const updated = { ...ctx, topicIds: existing.filter((id) => id !== topicId) } as SourceContext;
     await db.update(markets).set({ sourceContext: updated }).where(eq(markets.id, marketId));
     await logMarketEvent(marketId, 'human_edited', { detail: { action: 'unlink_topic', topicId, topicName: topic?.name, source: 'chat' } });
-    await logActivity('market_updated', { entityType: 'market', entityId: marketId, entityLabel: market.title, detail: { action: 'unlinked_topic', topicId, topicName: topic?.name }, source: 'chat' });
+    await log('market_updated', { entityType: 'market', entityId: marketId, entityLabel: market.title, detail: { action: 'unlinked_topic', topicId, topicName: topic?.name }, source: 'chat' });
     return `Mercado "${market.title}" desasociado de tema "${topic?.name ?? topicId}".`;
   }
 
@@ -904,10 +910,27 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       }
     }
     if (Object.keys(updates).length === 0) return 'Sin cambios.';
+    // Detect no-op: skip update if all values are identical to current
+    const [current] = await db.select().from(markets).where(eq(markets.id, marketId as string));
+    if (current) {
+      const changed: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(updates)) {
+        const cur = (current as Record<string, unknown>)[key];
+        const same = typeof val === 'object' && val !== null
+          ? JSON.stringify(cur) === JSON.stringify(val)
+          : cur === val;
+        if (!same) changed[key] = val;
+      }
+      if (Object.keys(changed).length === 0) return 'Sin cambios — los valores ya son los mismos.';
+      // Only update fields that actually differ
+      for (const k of Object.keys(updates)) {
+        if (!(k in changed)) delete updates[k];
+      }
+    }
     const [updated] = await db.update(markets).set(updates).where(eq(markets.id, marketId as string)).returning({ id: markets.id, title: markets.title, endTimestamp: markets.endTimestamp });
     if (!updated) return 'Mercado no encontrado.';
     await logMarketEvent(marketId as string, 'human_edited', { detail: { fields: Object.keys(updates), source: 'chat' } });
-    await logActivity('market_updated', { entityType: 'market', entityId: marketId as string, entityLabel: updated.title, detail: updates, source: 'chat' });
+    await log('market_updated', { entityType: 'market', entityId: marketId as string, entityLabel: updated.title, detail: updates, source: 'chat' });
     revalidatePath(`/dashboard/markets/${marketId}`);
     const confirmParts = Object.keys(updates).map((k) => {
       if (k === 'endTimestamp') return `cierre: ${new Date(Number(updates[k]) * 1000).toISOString()}`;
@@ -952,7 +975,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
 
     await db.update(topics).set({ signalCount: totalSignals, updatedAt: now }).where(eq(topics.id, targetTopicId));
     const [mergedT] = await db.select({ slug: topics.slug, name: topics.name }).from(topics).where(eq(topics.id, targetTopicId));
-    await logActivity('topics_merged', { entityType: 'topic', entityId: targetTopicId, entityLabel: mergedT?.name, detail: { sourceTopicIds, totalSignals, topicSlug: mergedT?.slug }, source: 'chat' });
+    await log('topics_merged', { entityType: 'topic', entityId: targetTopicId, entityLabel: mergedT?.name, detail: { sourceTopicIds, totalSignals, topicSlug: mergedT?.slug }, source: 'chat' });
     return `Merge completado. ${sourceTopicIds.length} tema(s) fusionados. Total señales: ${totalSignals}.`;
   }
 
@@ -974,7 +997,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
 
     await db.update(topics).set({ signalCount: count, lastSignalAt: new Date(), updatedAt: new Date() }).where(eq(topics.id, topicId));
     const [linkedT] = await db.select({ slug: topics.slug, name: topics.name }).from(topics).where(eq(topics.id, topicId));
-    await logActivity('signals_linked', { entityType: 'topic', entityId: topicId, entityLabel: linkedT?.name, detail: { linked, total: count, topicSlug: linkedT?.slug }, source: 'chat' });
+    await log('signals_linked', { entityType: 'topic', entityId: topicId, entityLabel: linkedT?.name, detail: { linked, total: count, topicSlug: linkedT?.slug }, source: 'chat' });
     return `${linked} señal(es) vinculada(s) al tema. Total: ${count}.`;
   }
 
@@ -994,11 +1017,11 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
 
     if (topicId) {
       const [researchT] = await db.select({ slug: topics.slug }).from(topics).where(eq(topics.id, topicId));
-      await logActivity('topic_research_started', { entityType: 'topic', entityId: topicId, entityLabel: description, detail: { topicSlug: researchT?.slug }, source: 'chat' });
+      await log('topic_research_started', { entityType: 'topic', entityId: topicId, entityLabel: description, detail: { topicSlug: researchT?.slug }, source: 'chat' });
     } else {
-      await logActivity('topic_research_started', { entityType: 'system', entityLabel: description, source: 'chat' });
+      await log('topic_research_started', { entityType: 'system', entityLabel: description, source: 'chat' });
     }
-    return `Investigación iniciada para "${description}". Se buscarán señales relacionadas.`;
+    return `Investigación iniciada para "${description}". Se buscarán señales relacionadas. IMPORTANTE: esta operación corre en segundo plano — los resultados NO están disponibles en esta conversación todavía. Informale al usuario que la operación fue lanzada y que los resultados estarán disponibles en unos minutos.`;
   }
 
   if (block.name === 'coalesce_topics') {
@@ -1009,10 +1032,11 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       data: { topicId },
     });
 
-    await logActivity('topic_coalescence_started', { entityType: topicId ? 'topic' : 'system', entityId: topicId, source: 'chat' });
-    return topicId
+    await log('topic_coalescence_started', { entityType: topicId ? 'topic' : 'system', entityId: topicId, source: 'chat' });
+    return (topicId
       ? `Coalescencia de temas iniciada para el tema ${topicId}. Se analizarán las señales vinculadas.`
-      : 'Coalescencia de temas iniciada. Se analizarán las señales recientes para crear/actualizar temas.';
+      : 'Coalescencia de temas iniciada. Se analizarán las señales recientes para crear/actualizar temas.')
+      + ' IMPORTANTE: esta operación corre en segundo plano — los resultados NO están disponibles en esta conversación todavía. Informale al usuario que la operación fue lanzada y que los resultados estarán disponibles en unos minutos.';
   }
 
   if (block.name === 'suggest_topic') {
@@ -1024,8 +1048,8 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       data: { description, topicId },
     });
 
-    await logActivity('topic_suggest_started', { entityType: 'system', entityLabel: description, detail: { topicId }, source: 'chat' });
-    return `Generación de tema iniciada para "${description}". Se investigará y creará/actualizará un tema.`;
+    await log('topic_suggest_started', { entityType: 'system', entityLabel: description, detail: { topicId }, source: 'chat' });
+    return `Generación de tema iniciada para "${description}". Se investigará y creará/actualizará un tema. IMPORTANTE: esta operación corre en segundo plano — los resultados NO están disponibles en esta conversación todavía. Informale al usuario que la operación fue lanzada y que los resultados estarán disponibles en unos minutos.`;
   }
 
   if (block.name === 'update_rule') {
@@ -1035,14 +1059,14 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     if (fields.check !== undefined) updates.check = fields.check;
     if (fields.enabled !== undefined) updates.enabled = fields.enabled;
     await db.update(rulesTable).set(updates).where(eq(rulesTable.id, ruleId));
-    await logActivity('rule_updated', { entityType: 'rule', entityLabel: ruleId, detail: fields as Record<string, unknown>, source: 'chat' });
+    await log('rule_updated', { entityType: 'rule', entityLabel: ruleId, detail: fields as Record<string, unknown>, source: 'chat' });
     return `Regla ${ruleId} actualizada.`;
   }
 
   if (block.name === 'create_rule') {
     const { id, type, description, check } = block.input as { id: string; type: string; description: string; check: string };
     await db.insert(rulesTable).values({ id, type, description, check }).onConflictDoNothing();
-    await logActivity('rule_created', { entityType: 'rule', entityLabel: id, detail: { type, description }, source: 'chat' });
+    await log('rule_created', { entityType: 'rule', entityLabel: id, detail: { type, description }, source: 'chat' });
     return `Regla ${id} creada.`;
   }
 
@@ -1062,13 +1086,13 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       return 'Ya hay una ingesta en curso (lanzada hace menos de 10 minutos).';
     }
     await inngest.send({ name: 'signals/ingest.requested', data: {} });
-    await logActivity('ingestion_started', { entityType: 'system', entityLabel: 'RSS, datos económicos, Twitter', source: 'chat' });
-    return 'Ingesta de señales iniciada. Se actualizarán señales y temas cuando termine.';
+    await log('ingestion_started', { entityType: 'system', entityLabel: 'RSS, datos económicos, Twitter', source: 'chat' });
+    return 'Ingesta de señales iniciada. Se actualizarán señales y temas cuando termine. IMPORTANTE: esta operación corre en segundo plano — los resultados NO están disponibles en esta conversación todavía. Informale al usuario que la operación fue lanzada y que los resultados estarán disponibles en unos minutos.';
   }
 
   if (block.name === 'sync_deployed') {
     const result = await syncDeployedMarkets();
-    await logActivity('sync_deployed', { entityType: 'system', entityLabel: `${result.created} nuevos, ${result.updated} actualizados`, detail: result as unknown as Record<string, unknown>, source: 'chat' });
+    await log('sync_deployed', { entityType: 'system', entityLabel: `${result.created} nuevos, ${result.updated} actualizados`, detail: result as unknown as Record<string, unknown>, source: 'chat' });
     return `Sync completado: ${result.created} creados, ${result.updated} actualizados, ${result.expanded} expandidos, ${result.resolved} resueltos onchain, ${result.topicLinked} temas vinculados.`;
   }
 
@@ -1109,7 +1133,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       sourceContext,
     }).returning({ id: markets.id });
 
-    await logActivity('market_created', {
+    await log('market_created', {
       entityType: 'market',
       entityId: created.id,
       entityLabel: input.title,
@@ -1142,8 +1166,8 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       name: 'market/review.requested',
       data: { marketId },
     });
-    await logActivity('review_started', { entityType: 'market', entityId: marketId, source: 'chat' });
-    return `Revisión del mercado ${marketId} iniciada.`;
+    await log('review_started', { entityType: 'market', entityId: marketId, source: 'chat' });
+    return `Revisión del mercado ${marketId} iniciada. IMPORTANTE: esta operación corre en segundo plano — los resultados NO están disponibles en esta conversación todavía. Informale al usuario que la operación fue lanzada y que los resultados estarán disponibles en unos minutos.`;
   }
 
   if (block.name === 'check_resolution') {
@@ -1168,8 +1192,8 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       name: 'markets/resolution.check',
       data: { id: marketId },
     });
-    await logActivity('resolution_check_started', { entityType: 'market', entityId: marketId, source: 'chat' });
-    return `Verificación de resolución iniciada para mercado ${marketId}.`;
+    await log('resolution_check_started', { entityType: 'market', entityId: marketId, source: 'chat' });
+    return `Verificación de resolución iniciada para mercado ${marketId}. IMPORTANTE: esta operación corre en segundo plano — los resultados NO están disponibles en esta conversación todavía. Informale al usuario que la operación fue lanzada y que los resultados estarán disponibles en unos minutos.`;
   }
 
   if (block.name === 'rescore_topic') {
@@ -1188,7 +1212,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       updatedAt: new Date(),
     }).where(eq(topics.id, topicId));
 
-    await logActivity('topic_rescored', { entityType: 'topic', entityId: topicId, entityLabel: topic.name, detail: { score, reason, topicSlug: topic.slug }, source: 'chat' });
+    await log('topic_rescored', { entityType: 'topic', entityId: topicId, entityLabel: topic.name, detail: { score, reason, topicSlug: topic.slug }, source: 'chat' });
     return `Tema re-puntuado: ${score.toFixed(1)}/10. ${reason}`;
   }
 
@@ -1200,7 +1224,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   if (block.name === 'update_generation_prompt') {
     const { prompt, summary } = block.input as { prompt: string; summary: string };
     await saveGenerationPrompt(prompt);
-    await logActivity('generation_prompt_updated', { entityType: 'system', entityLabel: summary, detail: { summary }, source: 'chat' });
+    await log('generation_prompt_updated', { entityType: 'system', entityLabel: summary, detail: { summary }, source: 'chat' });
     return 'Prompt de generación actualizado.';
   }
 
@@ -1212,7 +1236,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   if (block.name === 'update_chat_prompt') {
     const { prompt, summary } = block.input as { prompt: string; summary: string };
     await saveChatPrompt(prompt);
-    await logActivity('chat_prompt_updated', { entityType: 'system', entityLabel: summary, detail: { summary }, source: 'chat' });
+    await log('chat_prompt_updated', { entityType: 'system', entityLabel: summary, detail: { summary }, source: 'chat' });
     return 'Prompt del chat actualizado. Los cambios se aplican en el próximo mensaje.';
   }
 
@@ -1224,14 +1248,14 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
   if (block.name === 'update_resolution_prompt') {
     const { prompt, summary } = block.input as { prompt: string; summary: string };
     await saveResolutionPrompt(prompt);
-    await logActivity('resolution_prompt_updated', { entityType: 'system', entityLabel: summary, detail: { summary }, source: 'chat' });
+    await log('resolution_prompt_updated', { entityType: 'system', entityLabel: summary, detail: { summary }, source: 'chat' });
     return 'Prompt de resolución actualizado.';
   }
 
   if (block.name === 'save_resolution_feedback') {
     const { feedback, marketId } = block.input as { feedback: string; marketId?: string };
     await db.insert(resolutionFeedback).values({ text: feedback, marketId: marketId ?? null });
-    await logActivity('resolution_feedback_saved', {
+    await log('resolution_feedback_saved', {
       entityType: marketId ? 'market' : 'system',
       entityId: marketId,
       entityLabel: feedback.slice(0, 80),
@@ -1267,7 +1291,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
       category: category ?? null,
       config: sourceConfig ?? null,
     }).returning({ id: signalSources.id });
-    await logActivity('signal_source_created', { entityType: 'signal_source', entityId: created.id, entityLabel: name, detail: { type, url, category }, source: 'chat' });
+    await log('signal_source_created', { entityType: 'signal_source', entityId: created.id, entityLabel: name, detail: { type, url, category }, source: 'chat' });
     return `Fuente creada: "${name}" (${type}). ID: ${created.id}`;
   }
 
@@ -1280,7 +1304,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     if (fields.enabled !== undefined) updates.enabled = fields.enabled;
     if (fields.config !== undefined) updates.config = fields.config;
     await db.update(signalSources).set(updates).where(eq(signalSources.id, sourceId as string));
-    await logActivity('signal_source_updated', { entityType: 'signal_source', entityId: sourceId as string, entityLabel: (fields.name as string) ?? undefined, detail: fields as Record<string, unknown>, source: 'chat' });
+    await log('signal_source_updated', { entityType: 'signal_source', entityId: sourceId as string, entityLabel: (fields.name as string) ?? undefined, detail: fields as Record<string, unknown>, source: 'chat' });
     return `Fuente ${sourceId} actualizada.`;
   }
 
@@ -1324,7 +1348,7 @@ async function executeTool(block: Anthropic.ToolUseBlock, contextType: ContextTy
     if (Object.keys(updates).length <= 1) return 'Sin cambios.';
     const [updated] = await db.update(newsletters).set(updates).where(eq(newsletters.id, newsletterId)).returning({ id: newsletters.id, subjectLine: newsletters.subjectLine });
     if (!updated) return 'Newsletter no encontrado.';
-    await logActivity('newsletter_updated', { entityType: 'newsletter', entityId: newsletterId, entityLabel: updated.subjectLine ?? undefined, detail: { fields: Object.keys(updates).filter(k => k !== 'updatedAt') }, source: 'chat' });
+    await log('newsletter_updated', { entityType: 'newsletter', entityId: newsletterId, entityLabel: updated.subjectLine ?? undefined, detail: { fields: Object.keys(updates).filter(k => k !== 'updatedAt') }, source: 'chat' });
     revalidatePath(`/dashboard/newsletter/${newsletterId}`);
     return `Newsletter actualizado: ${Object.keys(updates).filter(k => k !== 'updatedAt').join(', ')}`;
   }
@@ -1365,6 +1389,7 @@ export async function GET(request: NextRequest) {
       contextId: c.contextId,
       title: c.title,
       messages: c.messages,
+      apiMessages: c.apiMessages,
       updatedAt: c.updatedAt.toISOString(),
     })),
     hasMore,
@@ -1380,6 +1405,7 @@ export async function POST(request: NextRequest) {
   const contextType: ContextType = body.contextType ?? 'global';
   const contextId: string | null = body.contextId ?? null;
   const conversationId: string | undefined = body.conversationId;
+  const previousApiMessages: Anthropic.MessageParam[] | null = body.apiMessages ?? null;
   const pageContext: { label: string; content: string } | null = body.pageContext ?? null;
 
   console.log(`[chat POST] contextType=${contextType} contextId=${contextId} conversationId=${conversationId}`);
@@ -1427,7 +1453,10 @@ export async function POST(request: NextRequest) {
   const systemMessage = `${chatPrompt}\n\n${entityContext}${pageContextBlock}${topicsSummary}${marketsSummary}${signalsSummary}${rulesContext}${globalContext}`;
 
   // Multi-turn tool loop — continues until Claude stops calling tools
-  let apiMessages: Anthropic.MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
+  // Restore full API messages (including tool blocks) from previous turns if available
+  let apiMessages: Anthropic.MessageParam[] = previousApiMessages
+    ? [...previousApiMessages, { role: 'user' as const, content: messages[messages.length - 1].content }]
+    : messages.map((m) => ({ role: m.role, content: m.content }));
   let reply = '';
   let redirect: string | null = null;
   const activityIds: string[] = [];
@@ -1462,7 +1491,7 @@ export async function POST(request: NextRequest) {
       for (const block of toolUseBlocks) {
         let result: string;
         try {
-          result = await executeTool(block, contextType, contextId, tz);
+          result = await executeTool(block, contextType, contextId, tz, activityIds);
         } catch (err) {
           console.error(`[chat] tool ${block.name} failed:`, err);
           result = `Error ejecutando ${block.name}: ${err instanceof Error ? err.message : String(err)}`;
@@ -1479,7 +1508,7 @@ export async function POST(request: NextRequest) {
     // Execute any remaining tool calls (side effects on end_turn)
     for (const block of toolUseBlocks) {
       try {
-        await executeTool(block, contextType, contextId, tz);
+        await executeTool(block, contextType, contextId, tz, activityIds);
       } catch (err) {
         console.error(`[chat] end-turn tool ${block.name} failed:`, err);
       }
@@ -1492,18 +1521,12 @@ export async function POST(request: NextRequest) {
   console.log(`[chat] final reply length=${reply.length} preview="${reply.slice(0, 100)}"`);
   if (!reply) reply = 'No entendí, ¿podés reformular?';
 
-  // Collect activity IDs created during this request (by source=chat, last 30 seconds)
-  try {
-    const recentActivity = await db.select({ id: activityLog.id }).from(activityLog)
-      .where(and(eq(activityLog.source, 'chat'), gt(activityLog.createdAt, new Date(Date.now() - 30_000))))
-      .orderBy(desc(activityLog.createdAt))
-      .limit(10);
-    activityIds.push(...recentActivity.map((r) => r.id));
-  } catch { /* ignore */ }
-
   // Include activityIds in the assistant message for persistence
   const assistantMessage: ChatMessage = { role: 'assistant', content: reply, ...(activityIds.length > 0 ? { activityIds } : {}) };
   const fullConversation: ChatMessage[] = [...messages, assistantMessage];
+
+  // Build full API messages (including tool blocks) for cross-turn context
+  const finalApiMessages = [...apiMessages, { role: 'assistant' as const, content: reply }];
 
   // Persist conversation
   const title = messages[0].content.slice(0, 80);
@@ -1512,12 +1535,12 @@ export async function POST(request: NextRequest) {
   if (conversationId) {
     await db
       .update(conversations)
-      .set({ messages: fullConversation, updatedAt: new Date() })
+      .set({ messages: fullConversation, apiMessages: finalApiMessages, updatedAt: new Date() })
       .where(eq(conversations.id, conversationId));
   } else {
     const [created] = await db
       .insert(conversations)
-      .values({ contextType, contextId, title, messages: fullConversation })
+      .values({ contextType, contextId, title, messages: fullConversation, apiMessages: finalApiMessages })
       .returning({ id: conversations.id });
     resultConvId = created.id;
   }
@@ -1530,7 +1553,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ reply, conversation: fullConversation, conversationId: resultConvId, redirect, activityIds });
+  return NextResponse.json({ reply, conversation: fullConversation, apiMessages: finalApiMessages, conversationId: resultConvId, redirect, activityIds });
 
   } catch (err) {
     console.error('[chat POST] error:', err);

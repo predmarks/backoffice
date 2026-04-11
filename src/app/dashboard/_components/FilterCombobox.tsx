@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { strip } from '@/lib/strip-diacritics';
 
 export interface FilterGroup {
   key: string;
@@ -29,8 +30,6 @@ export function FilterCombobox({ groups, active, onSelect, onRemove, placeholder
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-
-  const strip = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
   // Build flat list of filtered options for keyboard nav
   const filtered = groups.flatMap(g => {

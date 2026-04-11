@@ -13,6 +13,7 @@ import { logActivity, inngestRunUrl } from '@/lib/activity-log';
 import { setCurrentRunId } from '@/lib/llm';
 import { getRunCost } from '@/lib/usage';
 import { validateMarket } from '@/lib/validate-market';
+import { marketToSnapshot } from '@/lib/market-snapshot';
 import type { MarketRecord } from '@/agents/reviewer/types';
 
 function buildFeedback(
@@ -36,12 +37,8 @@ function buildFeedback(
   if (scoring.scores.timingSafety < 7) {
     lines.push(`Timing inseguro (${scoring.scores.timingSafety}/10) — reencuadrar para que no se resuelva con mercado abierto`);
   }
-  if (scoring.scores.timeliness < 5) {
-    lines.push(`Actualidad baja (${scoring.scores.timeliness}/10)`);
-  }
-  if (scoring.scores.volumePotential < 5) {
-    lines.push(`Potencial de volumen bajo (${scoring.scores.volumePotential}/10)`);
-  }
+  // timeliness and volumePotential are properties of the market's topic, not its text.
+  // Sending them as feedback causes the improver to add news/context to "fix" them.
 
   for (const claim of verification.claims) {
     if (!claim.isAccurate) {
@@ -60,21 +57,6 @@ function buildFeedback(
   return lines.join('\n');
 }
 
-function marketToSnapshot(market: MarketRecord): MarketSnapshot {
-  return {
-    title: market.title,
-    description: market.description,
-    resolutionCriteria: market.resolutionCriteria,
-    resolutionSource: market.resolutionSource,
-    contingencies: market.contingencies,
-    category: market.category as MarketSnapshot['category'],
-    tags: market.tags,
-    outcomes: market.outcomes,
-    endTimestamp: market.endTimestamp,
-    expectedResolutionDate: market.expectedResolutionDate ?? '',
-    timingSafety: market.timingSafety as MarketSnapshot['timingSafety'],
-  };
-}
 
 export const reviewJob = inngest.createFunction(
   {
@@ -193,225 +175,188 @@ export const reviewJob = inngest.createFunction(
         .map((r) => `Descarte del editor: ${(r.detail as Record<string, string>).reason}`);
     });
 
-    for (let i = 1; i <= THRESHOLDS.maxIterations; i++) {
-      // Load current state from DB (idempotent, works on resume)
-      const state = await step.run(`load-state-v${i}`, async () => {
-        const [m] = await db
-          .select()
-          .from(markets)
-          .where(eq(markets.id, marketId));
-        return {
-          currentMarket: m as MarketRecord,
-          iterations: (m!.iterations as Iteration[] | null) ?? [],
-        };
-      });
-
-      // Skip already-completed iteration (resume case)
-      if (state.iterations.length >= i) {
-        continue;
-      }
-
-      const currentMarket = state.currentMarket;
-      const iterations = state.iterations;
-
-      // Check rules
-      const rulesCheck = await step.run(`check-rules-v${i}`, async () => {
-        const result = await checkRules(currentMarket, verification, openMarketsList);
-
-        const failedHard = result.hardRuleResults.filter((r) => !r.passed).map((r) => r.ruleId);
-        const failedSoft = result.softRuleResults.filter((r) => !r.passed).map((r) => r.ruleId);
-        await logMarketEvent(marketId, 'rules_checked', {
-          iteration: i,
-          detail: { failedHard, failedSoft },
-        });
-
-        return result;
-      });
-
-      // Score — include related signal count for volume potential
-      const scoring = await step.run(`score-v${i}`, async () => {
-        // Count recent signals in the same category as a proxy for topic relevance
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const [{ count: signalCount }] = await db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(signals)
-          .where(and(
-            eq(signals.category, currentMarket.category),
-            gte(signals.publishedAt, thirtyDaysAgo),
-          ));
-
-        const result = await scoreMarket(currentMarket, verification, rulesCheck, signalCount);
-
-        await logMarketEvent(marketId, 'scored', {
-          iteration: i,
-          detail: { overallScore: result.scores.overallScore, recommendation: result.recommendation },
-        });
-
-        return result;
-      });
-
-      // Early termination: if score delta < 0.5 from previous iteration, stop iterating
-      const isPlateaued = i >= 2 && iterations.length > 0 && (() => {
-        const prevReview = iterations[iterations.length - 1].review;
-        return (scoring.scores.overallScore - prevReview.scores.overallScore) < 0.5;
-      })();
-      const effectivelyLastIteration = i === THRESHOLDS.maxIterations || isPlateaued;
-
-      // Build review for this iteration
-      const review: ReviewResult = {
-        scores: scoring.scores,
-        hardRuleResults: rulesCheck.hardRuleResults,
-        softRuleResults: rulesCheck.softRuleResults,
-        dataVerification: verification.claims,
-        resolutionSourceCheck: verification.resolutionSource,
-        recommendation: scoring.recommendation,
-        reviewedAt: new Date().toISOString(),
+    // Load current state from DB (iterations accumulate across triggers)
+    const state = await step.run('load-state', async () => {
+      const [m] = await db
+        .select()
+        .from(markets)
+        .where(eq(markets.id, marketId));
+      return {
+        currentMarket: m as MarketRecord,
+        iterations: (m!.iterations as Iteration[] | null) ?? [],
       };
+    });
 
-      const previousFeedback = iterations.length > 0 ? iterations[iterations.length - 1].feedback : undefined;
-      const feedback = buildFeedback(scoring, rulesCheck, verification, previousFeedback);
+    const currentMarket = state.currentMarket;
+    const iterations = state.iterations;
+    const iterationNumber = iterations.length + 1;
 
-      // Save iteration
-      const iteration: Iteration = {
-        version: i,
-        market: marketToSnapshot(currentMarket),
-        review,
-        feedback: feedback || undefined,
-      };
-      const updatedIterations = [...iterations, iteration];
+    // Check rules
+    const rulesCheck = await step.run('check-rules', async () => {
+      const result = await checkRules(currentMarket, verification, openMarketsList);
 
-      // Check if good enough → reviewed (stays as candidate for human to promote)
-      const isPassing = scoring.scores.overallScore >= THRESHOLDS.passingScore && scoring.recommendation !== 'reject';
+      const failedHard = result.hardRuleResults.filter((r) => !r.passed).map((r) => r.ruleId);
+      const failedSoft = result.softRuleResults.filter((r) => !r.passed).map((r) => r.ruleId);
+      await logMarketEvent(marketId, 'rules_checked', {
+        iteration: iterationNumber,
+        detail: { failedHard, failedSoft },
+      });
 
-      if (isPassing && (!feedback || effectivelyLastIteration)) {
-        // No feedback to address, or last iteration — finish now
-        await step.run(`finish-v${i}`, async () => {
-          await db
-            .update(markets)
-            .set({ review, iterations: updatedIterations, status: 'candidate' })
-            .where(eq(markets.id, marketId));
+      return result;
+    });
 
-          await logMarketEvent(marketId, 'pipeline_opened', {
-            iteration: i,
-            detail: { score: scoring.scores.overallScore },
-          });
-        });
-        const costUsd = await getRunCost(`review-pipeline/${runId}`);
-        await logActivity('review_completed', { entityType: 'market', entityId: marketId, entityLabel: initResult.market.title, detail: { result: 'opened', score: scoring.scores.overallScore, iteration: i, inngestRunUrl: runUrl, costUsd }, source: 'pipeline' });
-        return { status: 'candidate', marketId, iteration: i, score: scoring.scores.overallScore };
-      }
+    // Score — include related signal count for volume potential
+    const scoring = await step.run('score', async () => {
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const [{ count: signalCount }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(signals)
+        .where(and(
+          eq(signals.category, currentMarket.category),
+          gte(signals.publishedAt, thirtyDaysAgo),
+        ));
 
-      // Last iteration (or plateaued) — finish as candidate for human review
-      if (effectivelyLastIteration) {
-        await step.run(`finish-low-score-v${i}`, async () => {
-          await db
-            .update(markets)
-            .set({ review, iterations: updatedIterations, status: 'candidate' })
-            .where(eq(markets.id, marketId));
+      const result = await scoreMarket(currentMarket, verification, rulesCheck, signalCount);
 
-          const reason = isPlateaued ? 'Score plateaued — stopping early' : 'Below threshold after max iterations';
-          await logMarketEvent(marketId, 'pipeline_opened', {
-            iteration: i,
-            detail: { score: scoring.scores.overallScore, reason },
-          });
-        });
-        const reason = isPlateaued ? 'Score plateaued — stopping early' : 'Below threshold after max iterations';
-        const costUsd = await getRunCost(`review-pipeline/${runId}`);
-        await logActivity('review_completed', { entityType: 'market', entityId: marketId, entityLabel: initResult.market.title, detail: { result: 'needs_review', reason, score: scoring.scores.overallScore, inngestRunUrl: runUrl, costUsd }, source: 'pipeline' });
-        return { status: 'candidate', marketId, reason, score: scoring.scores.overallScore };
-      }
+      await logMarketEvent(marketId, 'scored', {
+        iteration: iterationNumber,
+        detail: { overallScore: result.scores.overallScore, recommendation: result.recommendation },
+      });
 
-      // Improve for next iteration
-      await step.run(`improve-v${i}`, async () => {
-        // Save iteration progress to DB for monitoring visibility
+      return result;
+    });
+
+    // Build review for this iteration
+    const review: ReviewResult = {
+      scores: scoring.scores,
+      hardRuleResults: rulesCheck.hardRuleResults,
+      softRuleResults: rulesCheck.softRuleResults,
+      dataVerification: verification.claims,
+      resolutionSourceCheck: verification.resolutionSource,
+      recommendation: scoring.recommendation,
+      reviewedAt: new Date().toISOString(),
+    };
+
+    const previousFeedback = iterations.length > 0 ? iterations[iterations.length - 1].feedback : undefined;
+    const feedback = buildFeedback(scoring, rulesCheck, verification, previousFeedback);
+
+    // Save iteration (appended to existing history)
+    const iteration: Iteration = {
+      version: iterationNumber,
+      market: marketToSnapshot(currentMarket),
+      review,
+      feedback: feedback || undefined,
+    };
+    const updatedIterations = [...iterations, iteration];
+
+    const isPassing = scoring.scores.overallScore >= THRESHOLDS.passingScore && scoring.recommendation !== 'reject';
+
+    // If passing or no actionable feedback — finish
+    if (isPassing || !feedback) {
+      await step.run('finish', async () => {
         await db
           .update(markets)
-          .set({ review, iterations: updatedIterations })
+          .set({ review, iterations: updatedIterations, status: 'candidate' })
           .where(eq(markets.id, marketId));
 
-        const allHumanFeedback = [...globalFeedbackEntries, ...humanFeedback, ...triageFeedback];
-        const improved = await improveMarket(currentMarket, feedback, updatedIterations, allHumanFeedback);
-
-        // Validate and fix LLM output
-        const validation = validateMarket(improved);
-        if (Object.keys(validation.fixes).length > 0) {
-          console.log(`[review] Validation fixes for "${improved.title}":`, validation.fixes);
-          improved.timingSafety = 'caution';
-        }
-        if (validation.warnings.length > 0) {
-          console.warn(`[review] Validation warnings:`, validation.warnings);
-        }
-
-        // Detect and prevent outcome-type conversion (multi → binary)
-        const wasBinary = Array.isArray(currentMarket.outcomes) &&
-          currentMarket.outcomes.length === 2 &&
-          currentMarket.outcomes.includes('Si') &&
-          currentMarket.outcomes.includes('No');
-        const isBinaryNow = improved.outcomes.length === 2 &&
-          improved.outcomes.includes('Si') &&
-          improved.outcomes.includes('No');
-
-        if (!wasBinary && isBinaryNow) {
-          console.warn(`[review] Improver converted multi-outcome to binary for "${improved.title}" — reverting outcomes`);
-          improved.outcomes = currentMarket.outcomes as string[];
-        }
-
-        // Compute what changed for logging
-        const changes: Record<string, { from: unknown; to: unknown }> = {};
-        const trackFields = ['title', 'description', 'resolutionCriteria', 'resolutionSource', 'contingencies', 'category', 'outcomes', 'endTimestamp', 'expectedResolutionDate', 'timingSafety'] as const;
-        for (const field of trackFields) {
-          const prev = currentMarket[field];
-          const next = improved[field];
-          if (JSON.stringify(prev) !== JSON.stringify(next)) {
-            changes[field] = { from: prev, to: next };
-          }
-        }
-
-        // Store changes in the iteration for visibility
-        if (Object.keys(changes).length > 0 && updatedIterations.length > 0) {
-          updatedIterations[updatedIterations.length - 1].changes = changes;
-          // Re-save iterations with changes included
-          await db
-            .update(markets)
-            .set({ iterations: updatedIterations })
-            .where(eq(markets.id, marketId));
-        }
-
-        // Apply improved snapshot to market
-        await db
-          .update(markets)
-          .set({
-            title: improved.title,
-            description: improved.description,
-            resolutionCriteria: improved.resolutionCriteria,
-            resolutionSource: improved.resolutionSource,
-            contingencies: improved.contingencies,
-            category: improved.category,
-            tags: improved.tags,
-            outcomes: improved.outcomes,
-            endTimestamp: improved.endTimestamp,
-            expectedResolutionDate: improved.expectedResolutionDate,
-            timingSafety: improved.timingSafety,
-          })
-          .where(eq(markets.id, marketId));
-
-        await logMarketEvent(marketId, 'improved', {
-          iteration: i,
-          detail: { changes },
+        await logMarketEvent(marketId, 'pipeline_opened', {
+          iteration: iterationNumber,
+          detail: { score: scoring.scores.overallScore },
         });
       });
+      const costUsd = await getRunCost(`review-pipeline/${runId}`);
+      await logActivity('review_completed', { entityType: 'market', entityId: marketId, entityLabel: initResult.market.title, detail: { result: isPassing ? 'opened' : 'needs_review', score: scoring.scores.overallScore, iteration: iterationNumber, inngestRunUrl: runUrl, costUsd }, source: 'pipeline' });
+      return { status: 'candidate', marketId, iteration: iterationNumber, score: scoring.scores.overallScore };
     }
 
-    // Fallback: all iterations were already completed (retry/resume after completion)
-    await step.run('finish-fallback', async () => {
-      await db.update(markets)
-        .set({ status: 'candidate' })
+    // Not passing — improve once, then finish
+    await step.run('improve', async () => {
+      // Save iteration progress to DB for monitoring visibility
+      await db
+        .update(markets)
+        .set({ review, iterations: updatedIterations })
         .where(eq(markets.id, marketId));
+
+      const allHumanFeedback = [...globalFeedbackEntries, ...humanFeedback, ...triageFeedback];
+      const improved = await improveMarket(currentMarket, feedback, updatedIterations, allHumanFeedback);
+
+      // Validate and fix LLM output
+      const validation = validateMarket(improved);
+      if (Object.keys(validation.fixes).length > 0) {
+        console.log(`[review] Validation fixes for "${improved.title}":`, validation.fixes);
+        improved.timingSafety = 'caution';
+      }
+      if (validation.warnings.length > 0) {
+        console.warn(`[review] Validation warnings:`, validation.warnings);
+      }
+
+      // Guard: restore title unless H7 explicitly failed
+      const h7Failed = rulesCheck.hardRuleResults.some((r) => r.ruleId === 'H7' && !r.passed);
+      if (!h7Failed && improved.title !== currentMarket.title) {
+        console.log(`[review] Title guard: restoring original title (H7 passed)`);
+        improved.title = currentMarket.title;
+      }
+
+      // Guard: prevent description from growing (no news/context bloat)
+      const descriptionMentioned = feedback.toLowerCase().includes('descripción') || feedback.toLowerCase().includes('description') || feedback.toLowerCase().includes('dato inexacto');
+      if (!descriptionMentioned && improved.description.length > (currentMarket.description?.length ?? 0) * 1.1) {
+        console.log(`[review] Description guard: restoring original (grew without feedback)`);
+        improved.description = currentMarket.description ?? improved.description;
+      }
+
+      // Detect and prevent outcome-type conversion (multi → binary)
+      const wasBinary = Array.isArray(currentMarket.outcomes) &&
+        currentMarket.outcomes.length === 2 &&
+        currentMarket.outcomes.includes('Si') &&
+        currentMarket.outcomes.includes('No');
+      const isBinaryNow = improved.outcomes.length === 2 &&
+        improved.outcomes.includes('Si') &&
+        improved.outcomes.includes('No');
+
+      if (!wasBinary && isBinaryNow) {
+        console.warn(`[review] Improver converted multi-outcome to binary for "${improved.title}" — reverting outcomes`);
+        improved.outcomes = currentMarket.outcomes as string[];
+      }
+
+      // Compute what changed for logging
+      const changes: Record<string, { from: unknown; to: unknown }> = {};
+      const trackFields = ['title', 'description', 'resolutionCriteria', 'resolutionSource', 'contingencies', 'category', 'outcomes', 'endTimestamp', 'expectedResolutionDate', 'timingSafety'] as const;
+      for (const field of trackFields) {
+        const prev = currentMarket[field];
+        const next = improved[field];
+        if (JSON.stringify(prev) !== JSON.stringify(next)) {
+          changes[field] = { from: prev, to: next };
+        }
+      }
+
+      // Store changes in the iteration for visibility
+      if (Object.keys(changes).length > 0 && updatedIterations.length > 0) {
+        updatedIterations[updatedIterations.length - 1].changes = changes;
+      }
+
+      // Store improved snapshot as pending suggestion for user review
+      await db
+        .update(markets)
+        .set({
+          pendingSuggestion: improved as MarketSnapshot,
+          iterations: updatedIterations,
+          status: 'candidate',
+        })
+        .where(eq(markets.id, marketId));
+
+      await logMarketEvent(marketId, 'improved', {
+        iteration: iterationNumber,
+        detail: { changes },
+      });
       await logMarketEvent(marketId, 'pipeline_opened', {
-        detail: { reason: 'All iterations already completed' },
+        iteration: iterationNumber,
+        detail: { score: scoring.scores.overallScore },
       });
     });
-    return { status: 'candidate', reason: 'fallback-after-completed-iterations' };
+
+    const costUsd = await getRunCost(`review-pipeline/${runId}`);
+    await logActivity('review_completed', { entityType: 'market', entityId: marketId, entityLabel: initResult.market.title, detail: { result: 'improved', score: scoring.scores.overallScore, iteration: iterationNumber, inngestRunUrl: runUrl, costUsd }, source: 'pipeline' });
+    return { status: 'candidate', marketId, iteration: iterationNumber, score: scoring.scores.overallScore };
   },
 );

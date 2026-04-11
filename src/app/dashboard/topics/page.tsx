@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { usePageContext } from '@/app/_components/PageContext';
 import { SearchInput } from '@/app/dashboard/_components/SearchInput';
+import { strip } from '@/lib/strip-diacritics';
 
 interface TopicData {
   id: string;
@@ -201,8 +202,8 @@ export default function TopicsPage() {
       if (marketFilter === 'with' && !(t.marketCount && t.marketCount > 0)) return false;
       if (marketFilter === 'without' && t.marketCount && t.marketCount > 0) return false;
       if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        if (!t.name.toLowerCase().includes(q) && !t.summary.toLowerCase().includes(q)) return false;
+        const q = strip(searchQuery);
+        if (!strip(t.name).includes(q) && !strip(t.summary).includes(q)) return false;
       }
       return true;
     })
