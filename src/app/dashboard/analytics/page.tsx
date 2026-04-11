@@ -25,23 +25,13 @@ function formatWeekLabel(monday: Date): string {
 }
 
 function groupByWeek(markets: MarketPnL[]): PnLChartRow[] {
-  const weekMap = new Map<string, { label: string; monday: Date | null; rows: MarketPnL[] }>();
+  const weekMap = new Map<string, { label: string; monday: Date; rows: MarketPnL[] }>();
 
   for (const m of markets) {
-    const resolved = m.withdrawnAt;
-    let key: string;
-    let label: string;
-    let monday: Date | null;
-
-    if (resolved) {
-      monday = getWeekMonday(resolved);
-      key = monday.toISOString();
-      label = formatWeekLabel(monday);
-    } else {
-      key = 'pending';
-      label = 'Pendientes';
-      monday = null;
-    }
+    if (!m.withdrawnAt) continue;
+    const monday = getWeekMonday(m.withdrawnAt);
+    const key = monday.toISOString();
+    const label = formatWeekLabel(monday);
 
     const existing = weekMap.get(key);
     if (existing) {
@@ -51,13 +41,7 @@ function groupByWeek(markets: MarketPnL[]): PnLChartRow[] {
     }
   }
 
-  // Sort: dated weeks chronologically, then pendientes at the end
-  const entries = [...weekMap.values()].sort((a, b) => {
-    if (!a.monday && !b.monday) return 0;
-    if (!a.monday) return 1;
-    if (!b.monday) return -1;
-    return a.monday.getTime() - b.monday.getTime();
-  });
+  const entries = [...weekMap.values()].sort((a, b) => a.monday.getTime() - b.monday.getTime());
 
   let cumulative = 0;
   return entries.map((entry) => {
@@ -241,6 +225,12 @@ export default async function AnalyticsPage({ searchParams }: Props) {
           liquidityPnL: m.liquidityPnL,
           ownedPnL: m.ownedPnL,
           netPnL: m.netPnL,
+          weekLabel: m.withdrawnAt
+            ? `${String(m.withdrawnAt.getDate()).padStart(2, '0')}/${String(m.withdrawnAt.getMonth() + 1).padStart(2, '0')}`
+            : null,
+          weekMonday: m.withdrawnAt
+            ? m.withdrawnAt.toISOString()
+            : null,
         }))}
       />
     </div>

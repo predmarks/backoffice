@@ -18,9 +18,11 @@ interface MarketRow {
   liquidityPnL: number;
   ownedPnL: number;
   netPnL: number;
+  weekLabel: string | null;
+  weekMonday: string | null;
 }
 
-type SortKey = 'id' | 'title' | 'seeded' | 'withdrawn' | 'pending' | 'liquidityPnL' | 'ownedPnL' | 'netPnL';
+type SortKey = 'week' | 'id' | 'title' | 'seeded' | 'withdrawn' | 'pending' | 'liquidityPnL' | 'ownedPnL' | 'netPnL';
 type SortDir = 'asc' | 'desc';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -59,6 +61,7 @@ const COLUMNS: { key: SortKey; label: string; width: string }[] = [
   { key: 'seeded', label: 'Fondeado', width: 'w-16' },
   { key: 'withdrawn', label: 'Retirado', width: 'w-16' },
   { key: 'pending', label: 'Pendiente', width: 'w-16' },
+  { key: 'week', label: 'Retiro', width: 'w-14' },
   { key: 'liquidityPnL', label: 'PnL LP', width: 'w-20' },
   { key: 'ownedPnL', label: 'PnL Trading', width: 'w-20' },
   { key: 'netPnL', label: 'PnL Neto', width: 'w-20' },
@@ -67,6 +70,14 @@ const COLUMNS: { key: SortKey; label: string; width: string }[] = [
 function sortMarkets(markets: MarketRow[], key: SortKey, dir: SortDir): MarketRow[] {
   const sorted = [...markets];
   sorted.sort((a, b) => {
+    // For week sort, always push nulls to bottom regardless of direction
+    if (key === 'week') {
+      if (!a.weekMonday && !b.weekMonday) return 0;
+      if (!a.weekMonday) return 1;
+      if (!b.weekMonday) return -1;
+      const cmp = a.weekMonday.localeCompare(b.weekMonday);
+      return dir === 'asc' ? cmp : -cmp;
+    }
     let cmp: number;
     if (key === 'id') {
       cmp = (Number(a.onchainId) || 0) - (Number(b.onchainId) || 0);
@@ -81,8 +92,8 @@ function sortMarkets(markets: MarketRow[], key: SortKey, dir: SortDir): MarketRo
 }
 
 export default function PnLTable({ markets }: { markets: MarketRow[] }) {
-  const [sortKey, setSortKey] = useState<SortKey>('netPnL');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortKey, setSortKey] = useState<SortKey>('week');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -184,6 +195,9 @@ function Row({ market: m }: { market: MarketRow }) {
       </span>
       <span className="w-16 text-right font-mono text-muted-foreground shrink-0">
         {formatUsd(m.pending)}
+      </span>
+      <span className="w-14 text-right font-mono text-muted-foreground/60 shrink-0">
+        {m.weekLabel ?? <span className="text-muted-foreground/40">—</span>}
       </span>
       <span className="w-20 text-right shrink-0">
         <PnLValue value={m.liquidityPnL} />

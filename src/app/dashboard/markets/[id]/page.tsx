@@ -561,7 +561,7 @@ export default async function MarketDetailPage({ params }: Props) {
               <span className="mx-2">&middot;</span>
               <TimingSafetyIndicator safety={market.timingSafety as Market['timingSafety']} />
               <span className="mx-2">&middot;</span>
-              <span className="text-xs text-muted-foreground/60">Creado {new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: tz }).format(market.createdAt)}</span>
+              <span className="text-xs text-muted-foreground/60">Creado {new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: tz }).format(market.publishedAt ?? market.createdAt)}</span>
             </Section>
 
             <Section title="Descripción">

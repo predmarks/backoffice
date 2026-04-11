@@ -107,6 +107,17 @@ export function Nav() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
+          {/* Theme toggle */}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+          >
+            <Sun size={14} className="rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+            <Moon size={14} className="absolute rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+            <span className="sr-only">Cambiar tema</span>
+          </Button>
+
           {/* Sistema dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -136,17 +147,6 @@ export function Nav() {
               })}
             </DropdownMenuContent>
           </DropdownMenu>
-
-          {/* Theme toggle */}
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
-          >
-            <Sun size={14} className="rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-            <Moon size={14} className="absolute rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-            <span className="sr-only">Cambiar tema</span>
-          </Button>
 
           {/* User dropdown */}
           <DropdownMenu>

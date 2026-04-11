@@ -151,9 +151,108 @@ export async function fetchAndCacheSeededAmounts(chainId: number): Promise<Map<s
   return result;
 }
 
+// --- Fetch and cache deployment dates from creation tx block timestamps ---
+
+export async function fetchAndCacheDeploymentDates(chainId: number): Promise<void> {
+  const missing = await db
+    .select({ id: markets.id, onchainAddress: markets.onchainAddress })
+    .from(markets)
+    .where(
+      and(
+        eq(markets.chainId, chainId),
+        isNotNull(markets.onchainAddress),
+        isNull(markets.publishedAt),
+      ),
+    );
+
+  if (missing.length === 0) return;
+
+  const missingAddresses = missing
+    .map((m) => m.onchainAddress)
+    .filter((a): a is string => !!a);
+
+  const txHashMap = await fetchMarketTxHashes(chainId, missingAddresses);
+  if (txHashMap.size === 0) return;
+
+  // Batch-fetch transactions to get blockNumber
+  const rpcUrl = chainId === MAINNET_CHAIN_ID ? process.env.PREDMARKS_RPC_URL : process.env.PREDMARKS_RPC_URL_SEPOLIA;
+  if (!rpcUrl) return;
+
+  const entries = [...txHashMap.entries()];
+  const txBlockMap = new Map<string, string>(); // marketAddr -> blockNumber hex
+
+  for (let i = 0; i < entries.length; i += 50) {
+    const batch = entries.slice(i, i + 50);
+    const resp = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(batch.map(([, txHash], idx) => ({
+        jsonrpc: '2.0', id: idx,
+        method: 'eth_getTransactionByHash',
+        params: [txHash],
+      }))),
+    });
+    const json = await resp.json() as Array<{
+      id: number;
+      result?: { blockNumber: string } | null;
+    }>;
+    for (const item of json) {
+      if (item.result?.blockNumber) {
+        txBlockMap.set(batch[item.id][0], item.result.blockNumber);
+      }
+    }
+  }
+
+  // Batch-fetch blocks to get timestamps
+  const uniqueBlocks = [...new Set(txBlockMap.values())];
+  const blockTimestampMap = new Map<string, number>(); // blockNumber hex -> unix timestamp
+
+  for (let i = 0; i < uniqueBlocks.length; i += 50) {
+    const batch = uniqueBlocks.slice(i, i + 50);
+    const resp = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(batch.map((blockNum, idx) => ({
+        jsonrpc: '2.0', id: idx,
+        method: 'eth_getBlockByNumber',
+        params: [blockNum, false],
+      }))),
+    });
+    const json = await resp.json() as Array<{
+      id: number;
+      result?: { timestamp: string } | null;
+    }>;
+    for (const item of json) {
+      if (item.result?.timestamp) {
+        blockTimestampMap.set(batch[item.id], Number(item.result.timestamp));
+      }
+    }
+  }
+
+  // Store publishedAt for each market
+  for (const m of missing) {
+    if (!m.onchainAddress) continue;
+    const addr = m.onchainAddress.toLowerCase();
+    const blockHex = txBlockMap.get(addr);
+    if (!blockHex) continue;
+    const timestamp = blockTimestampMap.get(blockHex);
+    if (!timestamp) continue;
+
+    await db
+      .update(markets)
+      .set({ publishedAt: new Date(timestamp * 1000) })
+      .where(eq(markets.id, m.id));
+  }
+}
+
 // --- Fetch and cache withdrawn amounts from withdrawal tx receipts ---
 
-export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Map<string, bigint>> {
+export interface WithdrawnData {
+  amount: bigint;
+  withdrawnAt?: string; // ISO timestamp
+}
+
+export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Map<string, WithdrawnData>> {
   const allDeployed = await db
     .select({
       id: markets.id,
@@ -166,7 +265,7 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
     .from(markets)
     .where(and(eq(markets.chainId, chainId), isNotNull(markets.onchainAddress)));
 
-  const result = new Map<string, bigint>();
+  const result = new Map<string, WithdrawnData>();
   const missingTxHash: { id: string; onchainAddress: string; txHash: string }[] = [];
   const missingNoTxHash: { id: string; onchainAddress: string }[] = [];
   const allMissingIds = new Set<string>();
@@ -174,14 +273,16 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
   for (const m of allDeployed) {
     if (!m.onchainAddress) continue;
     const addr = m.onchainAddress.toLowerCase();
+    const res = m.resolution as Resolution | null;
 
     if (m.withdrawnAmount && m.withdrawnAmount !== '0') {
-      result.set(addr, BigInt(m.withdrawnAmount));
-      continue;
+      const cachedWithdrawnAt = res?.withdrawal?.withdrawnAt;
+      result.set(addr, { amount: BigInt(m.withdrawnAmount), withdrawnAt: cachedWithdrawnAt });
+      if (cachedWithdrawnAt) continue;
+      // Have amount but no date — fall through to passes to find the timestamp
     }
 
     allMissingIds.add(m.id);
-    const res = m.resolution as Resolution | null;
     const txHash = res?.withdrawal?.withdrawTxHash;
     if (txHash) {
       missingTxHash.push({ id: m.id, onchainAddress: addr, txHash });
@@ -205,11 +306,22 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
 
         if (withdrawTransfer && withdrawTransfer.args.value > BigInt(0)) {
           const amount = withdrawTransfer.args.value;
-          result.set(m.onchainAddress, amount);
+          // Get block timestamp for the withdrawal
+          const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+          const withdrawnAt = new Date(Number(block.timestamp) * 1000).toISOString();
+          // Update result — use existing amount if already cached (backfill case)
+          const existing = result.get(m.onchainAddress);
+          result.set(m.onchainAddress, { amount: existing?.amount ?? amount, withdrawnAt });
           allMissingIds.delete(m.id);
+          // Persist both amount and withdrawnAt to DB
+          const mRow = allDeployed.find((d) => d.id === m.id);
+          const mRes = (mRow?.resolution as Resolution | null) ?? {} as Resolution;
           await db
             .update(markets)
-            .set({ withdrawnAmount: amount.toString() })
+            .set({
+              withdrawnAmount: (existing?.amount ?? amount).toString(),
+              resolution: { ...mRes, withdrawal: { ...mRes.withdrawal, withdrawnAt, withdrawTxHash: m.txHash } },
+            })
             .where(eq(markets.id, m.id));
         }
       } catch {
@@ -240,7 +352,10 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
       const market = missingNoTxHash.find((m) => m.id === log.entityId);
       if (!market) continue;
 
-      result.set(market.onchainAddress, BigInt(raw));
+      // Get existing withdrawnAt from resolution for this market
+      const mRow = allDeployed.find((d) => d.id === market.id);
+      const mRes = mRow?.resolution as Resolution | null;
+      result.set(market.onchainAddress, { amount: BigInt(raw), withdrawnAt: mRes?.withdrawal?.withdrawnAt });
       allMissingIds.delete(market.id);
       await db
         .update(markets)
@@ -260,7 +375,7 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
       );
 
       // Collect all transfers for all candidates in parallel
-      type TransferInfo = { marketId: string; addr: string; hash: string; value: string };
+      type TransferInfo = { marketId: string; addr: string; hash: string; value: string; blockTimestamp?: string };
       const allTransfers: TransferInfo[] = [];
 
       await Promise.all(candidates.map(async (m) => {
@@ -276,19 +391,19 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
                 fromAddress: addr,
                 contractAddresses: [collateralToken!.toLowerCase()],
                 category: ['erc20'],
-                withMetadata: false,
+                withMetadata: true,
                 order: 'desc',
                 maxCount: '0x3e8',
               }],
             }),
           });
           const json = await resp.json() as {
-            result?: { transfers: Array<{ hash: string; to: string; rawContract: { value: string } }> };
+            result?: { transfers: Array<{ hash: string; to: string; rawContract: { value: string }; metadata: { blockTimestamp: string } }> };
             error?: { message: string };
           };
           if (json.error) throw new Error(json.error.message);
           for (const t of json.result?.transfers ?? []) {
-            allTransfers.push({ marketId: m.id, addr, hash: t.hash, value: t.rawContract.value });
+            allTransfers.push({ marketId: m.id, addr, hash: t.hash, value: t.rawContract.value, blockTimestamp: t.metadata?.blockTimestamp });
           }
         } catch (err) {
           console.warn(`[analytics] Failed to scan transfers for ${m.onchainAddress}:`, err);
@@ -302,27 +417,32 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
       // Batch in groups of 50 to avoid RPC limits
       for (let i = 0; i < uniqueHashes.length; i += 50) {
         const batch = uniqueHashes.slice(i, i + 50);
-        const batchResp = await fetch(rpcUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(batch.map((hash, idx) => ({
-            jsonrpc: '2.0', id: idx,
-            method: 'eth_getTransactionByHash',
-            params: [hash],
-          }))),
-        });
-        const batchJson = await batchResp.json() as Array<{
-          id: number;
-          result?: { input: string } | null;
-        }>;
-        for (const item of batchJson) {
-          if (item.result?.input) {
-            txInputMap.set(batch[item.id], item.result.input);
+        try {
+          const batchResp = await fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(batch.map((hash, idx) => ({
+              jsonrpc: '2.0', id: idx,
+              method: 'eth_getTransactionByHash',
+              params: [hash],
+            }))),
+          });
+          if (!batchResp.ok) continue;
+          const batchJson = await batchResp.json() as Array<{
+            id: number;
+            result?: { input: string } | null;
+          }>;
+          for (const item of batchJson) {
+            if (item.result?.input) {
+              txInputMap.set(batch[item.id], item.result.input);
+            }
           }
+        } catch {
+          // Skip batch if RPC returns invalid response
         }
       }
 
-      // Match withdraw() calls to markets
+      // Match withdraw() calls to markets and extract timestamps
       const resolved = new Set<string>();
       for (const t of allTransfers) {
         if (resolved.has(t.marketId)) continue;
@@ -330,11 +450,29 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
         if (input?.startsWith(WITHDRAW_SELECTOR)) {
           const amount = BigInt(t.value);
           if (amount > BigInt(0)) {
-            result.set(t.addr, amount);
+            const withdrawnAt = t.blockTimestamp ?? undefined;
+            // Use existing amount if already cached (backfill case)
+            const existing = result.get(t.addr);
+            result.set(t.addr, { amount: existing?.amount ?? amount, withdrawnAt });
             resolved.add(t.marketId);
+
+            // Cache amount + withdrawal date in DB
+            const mRow = allDeployed.find((d) => d.id === t.marketId);
+            const mRes = (mRow?.resolution as Resolution | null) ?? {} as Resolution;
+            const updatedResolution = {
+              ...mRes,
+              withdrawal: {
+                ...mRes.withdrawal,
+                withdrawnAt: withdrawnAt ?? mRes.withdrawal?.withdrawnAt,
+                withdrawTxHash: t.hash,
+              },
+            };
             await db
               .update(markets)
-              .set({ withdrawnAmount: amount.toString() })
+              .set({
+                withdrawnAmount: (existing?.amount ?? amount).toString(),
+                resolution: updatedResolution,
+              })
               .where(eq(markets.id, t.marketId));
           }
         }
@@ -394,37 +532,40 @@ function computeOwnedPositionsPnL(
 // --- Main analytics function ---
 
 export async function getAnalyticsData(chainId: number): Promise<AnalyticsData> {
-  // Parallel fetch
-  const [dbMarketRows, seededMap, withdrawnMap, ownedAddresses] = await Promise.all([
-    db
-      .select({
-        id: markets.id,
-        title: markets.title,
-        category: markets.category,
-        status: markets.status,
-        publishedAt: markets.publishedAt,
-        createdAt: markets.createdAt,
-        onchainId: markets.onchainId,
-        onchainAddress: markets.onchainAddress,
-        resolvedAt: markets.resolvedAt,
-        closedAt: markets.closedAt,
-        pendingBalance: markets.pendingBalance,
-        seededAmount: markets.seededAmount,
-        withdrawnAmount: markets.withdrawnAmount,
-        resolution: markets.resolution,
-        outcomes: markets.outcomes,
-      })
-      .from(markets)
-      .where(
-        and(
-          eq(markets.chainId, chainId),
-          isNotNull(markets.onchainAddress),
-        ),
-      ),
+  // Phase 1: Cache deployment dates and withdrawal data (writes to DB)
+  const [, seededMap, withdrawnMap, ownedAddresses] = await Promise.all([
+    fetchAndCacheDeploymentDates(chainId),
     fetchAndCacheSeededAmounts(chainId),
     fetchAndCacheWithdrawnAmounts(chainId),
     getOwnedAddresses(),
   ]);
+
+  // Phase 2: Read market rows AFTER caching so publishedAt is populated
+  const dbMarketRows = await db
+    .select({
+      id: markets.id,
+      title: markets.title,
+      category: markets.category,
+      status: markets.status,
+      publishedAt: markets.publishedAt,
+      createdAt: markets.createdAt,
+      onchainId: markets.onchainId,
+      onchainAddress: markets.onchainAddress,
+      resolvedAt: markets.resolvedAt,
+      closedAt: markets.closedAt,
+      pendingBalance: markets.pendingBalance,
+      seededAmount: markets.seededAmount,
+      withdrawnAmount: markets.withdrawnAmount,
+      resolution: markets.resolution,
+      outcomes: markets.outcomes,
+    })
+    .from(markets)
+    .where(
+      and(
+        eq(markets.chainId, chainId),
+        isNotNull(markets.onchainAddress),
+      ),
+    );
 
   // Fetch owned positions from subgraph
   const ownedPositions = await fetchOwnedPositionsDetailed(chainId, ownedAddresses);
@@ -436,7 +577,8 @@ export async function getAnalyticsData(chainId: number): Promise<AnalyticsData> 
   const marketPnLs: MarketPnL[] = dbMarketRows.map((m) => {
     const addr = m.onchainAddress?.toLowerCase() ?? '';
     const seeded = toUsdc(seededMap.get(addr)?.toString());
-    const withdrawn = toUsdc(withdrawnMap.get(addr)?.toString());
+    const withdrawnData = withdrawnMap.get(addr);
+    const withdrawn = toUsdc(withdrawnData?.amount.toString());
     const pending = toUsdc(m.pendingBalance);
     const owned = ownedPnLMap.get(addr);
     const ownedInvested = owned ? Number(owned.invested) / USDC_DECIMALS : 0;
@@ -446,8 +588,9 @@ export async function getAnalyticsData(chainId: number): Promise<AnalyticsData> 
     const liquidityPnL = (withdrawn + pending) - seeded;
     const netPnL = liquidityPnL + ownedPnL;
 
+    // Prefer chain-derived timestamp from withdrawnMap, fall back to DB resolution JSONB
     const res = m.resolution as Resolution | null;
-    const withdrawnAtStr = res?.withdrawal?.withdrawnAt;
+    const withdrawnAtStr = withdrawnData?.withdrawnAt ?? res?.withdrawal?.withdrawnAt;
 
     return {
       marketId: m.id,

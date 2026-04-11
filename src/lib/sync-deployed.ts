@@ -481,5 +481,9 @@ export async function syncDeployedMarkets(chainId: number = MAINNET_CHAIN_ID): P
     );
   }
 
+  // Phase 5: Backfill deployment dates from chain for markets missing publishedAt
+  const { fetchAndCacheDeploymentDates } = await import('./analytics');
+  await fetchAndCacheDeploymentDates(chainId);
+
   return { created, updated, expanded, resolved, topicLinked, topicResearchDispatched, resolutionTriggered: closedMarketIds.length };
 }
