@@ -3,7 +3,7 @@ import { markets, activityLog } from '@/db/schema';
 import { and, eq, isNotNull, isNull, inArray } from 'drizzle-orm';
 import { createPublicClient, http, decodeFunctionData, erc20Abi, parseEventLogs } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
-import { PRECOG_MASTER_ABI, COLLATERAL_TOKENS, MASTER_ADDRESSES } from './contracts';
+import { PRECOG_MASTER_ABI, COLLATERAL_TOKENS } from './contracts';
 import { MAINNET_CHAIN_ID } from './chains';
 import { getOwnedAddresses } from './owned-addresses';
 import { fetchOwnedPositionsDetailed, fetchMarketTxHashes, type OwnedPositionDetail } from './indexer';
@@ -172,7 +172,7 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
     if (!m.onchainAddress) continue;
     const addr = m.onchainAddress.toLowerCase();
 
-    if (m.withdrawnAmount) {
+    if (m.withdrawnAmount && m.withdrawnAmount !== '0') {
       result.set(addr, BigInt(m.withdrawnAmount));
       continue;
     }
@@ -200,7 +200,7 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
           (log) => log.args.from.toLowerCase() === m.onchainAddress,
         );
 
-        if (withdrawTransfer) {
+        if (withdrawTransfer && withdrawTransfer.args.value > BigInt(0)) {
           const amount = withdrawTransfer.args.value;
           result.set(m.onchainAddress, amount);
           allMissingIds.delete(m.id);
@@ -246,30 +246,24 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
     }
   }
 
-  // Pass 3: Onchain scan via Alchemy getAssetTransfers API
-  // Catches direct contract withdrawals not logged through the UI
+  // Pass 3: Onchain scan — find withdraw(address) calls via Alchemy
+  const WITHDRAW_SELECTOR = '0x51cff8d9'; // withdraw(address)
   if (allMissingIds.size > 0) {
     const collateralToken = COLLATERAL_TOKENS[chainId];
     const rpcUrl = chainId === MAINNET_CHAIN_ID ? process.env.PREDMARKS_RPC_URL : process.env.PREDMARKS_RPC_URL_SEPOLIA;
     if (collateralToken && rpcUrl) {
-      const ownedAddresses = await getOwnedAddresses();
-      const targetSet = new Set(ownedAddresses.map((a) => a.toLowerCase()));
-      // Include Master contract — marketWithdraw sends tokens to Master (msg.sender)
-      const masterAddr = MASTER_ADDRESSES[chainId]?.toLowerCase();
-      if (masterAddr) targetSet.add(masterAddr);
+      const candidates = allDeployed.filter(
+        (m) => m.onchainAddress && allMissingIds.has(m.id),
+      );
 
-      // Only scan markets with near-zero balance (likely withdrawn)
-      const candidates = allDeployed.filter((m) => {
-        if (!m.onchainAddress || !allMissingIds.has(m.id)) return false;
-        const pending = Number(BigInt(m.pendingBalance ?? '0'));
-        const seeded = Number(BigInt(m.seededAmount ?? '0'));
-        return seeded > 0 && pending < seeded * 0.1;
-      });
+      // Collect all transfers for all candidates in parallel
+      type TransferInfo = { marketId: string; addr: string; hash: string; value: string };
+      const allTransfers: TransferInfo[] = [];
 
-      for (const m of candidates) {
+      await Promise.all(candidates.map(async (m) => {
         try {
           const addr = m.onchainAddress!.toLowerCase();
-          const resp = await fetch(rpcUrl, {
+          const resp = await fetch(rpcUrl!, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -277,36 +271,69 @@ export async function fetchAndCacheWithdrawnAmounts(chainId: number): Promise<Ma
               method: 'alchemy_getAssetTransfers',
               params: [{
                 fromAddress: addr,
-                contractAddresses: [collateralToken.toLowerCase()],
+                contractAddresses: [collateralToken!.toLowerCase()],
                 category: ['erc20'],
                 withMetadata: false,
-                order: 'asc',
+                order: 'desc',
                 maxCount: '0x3e8',
               }],
             }),
           });
           const json = await resp.json() as {
-            result?: { transfers: Array<{ to: string; rawContract: { value: string } }> };
+            result?: { transfers: Array<{ hash: string; to: string; rawContract: { value: string } }> };
             error?: { message: string };
           };
           if (json.error) throw new Error(json.error.message);
-
-          let totalWithdrawn = BigInt(0);
           for (const t of json.result?.transfers ?? []) {
-            if (targetSet.has(t.to.toLowerCase())) {
-              totalWithdrawn += BigInt(t.rawContract.value);
-            }
-          }
-
-          if (totalWithdrawn > BigInt(0)) {
-            result.set(addr, totalWithdrawn);
-            await db
-              .update(markets)
-              .set({ withdrawnAmount: totalWithdrawn.toString() })
-              .where(eq(markets.id, m.id));
+            allTransfers.push({ marketId: m.id, addr, hash: t.hash, value: t.rawContract.value });
           }
         } catch (err) {
           console.warn(`[analytics] Failed to scan transfers for ${m.onchainAddress}:`, err);
+        }
+      }));
+
+      // Deduplicate tx hashes and batch-fetch transactions
+      const uniqueHashes = [...new Set(allTransfers.map((t) => t.hash))];
+      const txInputMap = new Map<string, string>();
+
+      // Batch in groups of 50 to avoid RPC limits
+      for (let i = 0; i < uniqueHashes.length; i += 50) {
+        const batch = uniqueHashes.slice(i, i + 50);
+        const batchResp = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(batch.map((hash, idx) => ({
+            jsonrpc: '2.0', id: idx,
+            method: 'eth_getTransactionByHash',
+            params: [hash],
+          }))),
+        });
+        const batchJson = await batchResp.json() as Array<{
+          id: number;
+          result?: { input: string } | null;
+        }>;
+        for (const item of batchJson) {
+          if (item.result?.input) {
+            txInputMap.set(batch[item.id], item.result.input);
+          }
+        }
+      }
+
+      // Match withdraw() calls to markets
+      const resolved = new Set<string>();
+      for (const t of allTransfers) {
+        if (resolved.has(t.marketId)) continue;
+        const input = txInputMap.get(t.hash);
+        if (input?.startsWith(WITHDRAW_SELECTOR)) {
+          const amount = BigInt(t.value);
+          if (amount > BigInt(0)) {
+            result.set(t.addr, amount);
+            resolved.add(t.marketId);
+            await db
+              .update(markets)
+              .set({ withdrawnAmount: amount.toString() })
+              .where(eq(markets.id, t.marketId));
+          }
         }
       }
     }
