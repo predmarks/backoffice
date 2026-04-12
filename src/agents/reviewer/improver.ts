@@ -86,7 +86,7 @@ export async function improveMarket(
     tags: (market as unknown as { tags: string[] }).tags,
     outcomes: market.outcomes,
     endTimestamp: market.endTimestamp,
-    endDate: new Date(market.endTimestamp * 1000).toISOString(),
+    endDate: new Date(market.endTimestamp * 1000).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
     expectedResolutionDate: market.expectedResolutionDate,
     timingSafety: market.timingSafety,
   };

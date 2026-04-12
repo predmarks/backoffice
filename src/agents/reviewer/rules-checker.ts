@@ -84,7 +84,7 @@ export async function checkRules(
     tags: market.tags,
     outcomes: market.outcomes,
     endTimestamp: market.endTimestamp,
-    endDate: new Date(market.endTimestamp * 1000).toISOString(),
+    endDate: new Date(market.endTimestamp * 1000).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
     createdAt: market.createdAt,
   };
 

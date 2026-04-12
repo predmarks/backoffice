@@ -56,7 +56,7 @@ export async function verifyData(
     contingencies: market.contingencies,
     category: market.category,
     endTimestamp: market.endTimestamp,
-    endDate: new Date(market.endTimestamp * 1000).toISOString(),
+    endDate: new Date(market.endTimestamp * 1000).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
   };
 
   const userMessage = `Verify every numerical claim and factual assertion in this candidate market.
